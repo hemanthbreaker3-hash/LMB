@@ -25,6 +25,15 @@ try:
 except OSError:
     pass
 
+# wzgram performance defaults (https://wzgram.com/features/performance/).
+# Only set when the operator has not already configured them.
+# WZGRAM_MAX_INFLIGHT_MEDIA stays at library default (6) per connection —
+# throughput comes from multiple media sessions, not overloading one socket.
+os.environ.setdefault("WZGRAM_MEDIA_TIMEOUT", "120")
+os.environ.setdefault("WZGRAM_MAX_CONCURRENT", "16")
+# 0 keeps kernel socket autotuning (recommended for high-throughput links).
+os.environ.setdefault("WZGRAM_SOCKET_BUFFER", "0")
+
 _DB_PARTITION_SALT = b"wzmlx_v3_db_partition_salt"
 
 #  MiB = 2_097_152_000 bytes  (~2.00 GB)
@@ -238,12 +247,26 @@ class TgClient:
 
         # Telegram SaveBigFilePart hard limit is 512 KiB.
         PART_SIZE = 512 * 1024
-        # Aggressive path: parallel MTProto from the first megabyte so speed
-        # starts near the high end (target 300–700 Mbps class) instead of
-        # ramping slowly from ~10–50 Mbps.
-        MIN_FAST_SIZE = 1 * 1024 * 1024
-        # Hard ceiling for media sessions / concurrent workers.
-        MAX_SESSIONS = 8
+        # Align with wzgram performance model (https://wzgram.com/features/performance/):
+        # multiple media sessions × parallel SaveBigFilePart, full concurrency from part 0.
+        # Target: ≥200 Mbps class from the first reported progress tick.
+        MIN_FAST_SIZE = 512 * 1024
+        # Default session count when WZGRAM_FAST_UPLOAD_SESSIONS is unset.
+        # wzgram caps in-flight requests at WZGRAM_MAX_INFLIGHT_MEDIA (default 6)
+        # PER SESSION — raising WORKERS_PER_SESSION past that just queues more
+        # requests behind the same per-connection gate instead of adding real
+        # throughput (see https://wzgram.com/features/performance/, "Gotchas").
+        # The only lever that actually scales aggregate throughput is the
+        # number of parallel media sessions, so that's what moves here.
+        MAX_SESSIONS = 20
+        # Hard ceiling for the WZGRAM_FAST_UPLOAD_SESSIONS operator override
+        # below. This must stay independent of MAX_SESSIONS — clamping the
+        # override to the same constant as the default silently capped any
+        # attempt to scale past the default (e.g. WZGRAM_FAST_UPLOAD_SESSIONS=24
+        # was previously clamped right back down to 8/16 here).
+        MAX_SESSIONS_CEILING = 40
+        # Keep ≤ WZGRAM_MAX_INFLIGHT_MEDIA (default 6) per connection to avoid
+        # mass timeouts; scale throughput via more sessions, not more per-session load.
         WORKERS_PER_SESSION = 6
 
         async def _close_media_sessions():
@@ -270,7 +293,13 @@ class TgClient:
                 client._fast_upload_sessions.append(new_sess)
                 return new_sess
 
+        async def _start_one_session(dc_id, auth_key, test_mode):
+            sess = Session(client, dc_id, auth_key, test_mode, is_media=True)
+            await sess.start()
+            return sess
+
         async def _get_media_sessions(pool_size=8):
+            """Return a full media-session pool. New sessions are started in parallel."""
             async with client._fast_upload_lock:
                 alive = [
                     s
@@ -278,18 +307,43 @@ class TgClient:
                     if getattr(s, "is_started", None) and s.is_started.is_set()
                 ]
                 client._fast_upload_sessions = alive
-                if len(alive) >= pool_size:
+                need = pool_size - len(alive)
+                if need <= 0:
                     return alive[:pool_size]
                 dc_id = await client.storage.dc_id()
                 auth_key = await client.storage.auth_key()
                 test_mode = await client.storage.test_mode()
                 if not auth_key:
-                    return []
-                while len(client._fast_upload_sessions) < pool_size:
-                    sess = Session(client, dc_id, auth_key, test_mode, is_media=True)
-                    await sess.start()
-                    client._fast_upload_sessions.append(sess)
-                return list(client._fast_upload_sessions[:pool_size])
+                    return list(alive)
+            # Start missing sessions concurrently (outside lock) so the first
+            # upload does not pay sequential connect latency.
+            started = await gather(
+                *[_start_one_session(dc_id, auth_key, test_mode) for _ in range(need)],
+                return_exceptions=True,
+            )
+            async with client._fast_upload_lock:
+                for s in started:
+                    if isinstance(s, Exception):
+                        LOGGER.debug("Media session start failed: %s", s)
+                        continue
+                    client._fast_upload_sessions.append(s)
+                alive = [
+                    s
+                    for s in client._fast_upload_sessions
+                    if getattr(s, "is_started", None) and s.is_started.is_set()
+                ]
+                client._fast_upload_sessions = alive
+                return list(alive[:pool_size])
+
+        async def warm_fast_upload_sessions(pool_size=None):
+            """Pre-warm the media session pool so the first upload is already hot."""
+            size = pool_size or MAX_SESSIONS
+            try:
+                await _get_media_sessions(pool_size=size)
+            except Exception as exc:
+                LOGGER.debug("Fast-upload session warm-up skipped: %s", exc)
+
+        client.warm_fast_upload_sessions = warm_fast_upload_sessions
 
         async def _fast_save_file(path, file_id=None, file_part=0, progress=None, progress_args=()):
             if (
@@ -321,7 +375,7 @@ class TgClient:
             try:
                 env_sessions = int(os.environ.get("WZGRAM_FAST_UPLOAD_SESSIONS", "0") or 0)
                 if env_sessions > 0:
-                    pool_size = max(4, min(MAX_SESSIONS, env_sessions))
+                    pool_size = max(4, min(MAX_SESSIONS_CEILING, env_sessions))
                 else:
                     # Always start at the full session ceiling — no slow ramp.
                     pool_size = MAX_SESSIONS
@@ -394,8 +448,11 @@ class TgClient:
                         async with progress_lock:
                             uploaded_bytes = min(file_size, uploaded_bytes + len(chunk))
                             now = time.monotonic()
+                            # Report aggressively at the start so the UI shows
+                            # real MTProto throughput instead of a slow average ramp.
+                            interval = 0.05 if uploaded_bytes < 8 * 1024 * 1024 else 0.12
                             if callable(progress) and (
-                                uploaded_bytes >= file_size or (now - last_progress_ts) >= 0.15
+                                uploaded_bytes >= file_size or (now - last_progress_ts) >= interval
                             ):
                                 last_progress_ts = now
                                 cur = uploaded_bytes
@@ -462,7 +519,8 @@ class TgClient:
         client._wz_fast_upload_installed = True
         LOGGER.info(
             "LMB wzgram fast upload installed "
-            "(target 300–700 Mbps; sessions=8, workers=6x sessions, part=512KiB, min=1MB, no ramp)"
+            "(target ≥300 Mbps from first parts; sessions=20 (env override up to 40), workers=6/session, "
+            "part=512KiB, parallel session warm-up)"
         )
         return client
 
@@ -513,6 +571,7 @@ class TgClient:
                 proxy=proxy,
             )
             await hbot.start()
+            cls._install_fast_upload(hbot)
             LOGGER.info(f"Helper Bot [@{hbot.me.username}] Started!")
             cls.helper_bots[no], cls.helper_loads[no] = hbot, 0
         except FloodWait as e:
@@ -531,6 +590,7 @@ class TgClient:
                 proxy=proxy,
             )
             await hbot.start()
+            cls._install_fast_upload(hbot)
             LOGGER.info(f"Helper Bot [@{hbot.me.username}] Started!")
             cls.helper_bots[no], cls.helper_loads[no] = hbot, 0
         except FloodWait as e:
@@ -719,6 +779,11 @@ class TgClient:
                 await sleep(e.value)
         cls.BNAME = cls.bot.me.username
         cls.ID = Config.BOT_TOKEN.split(":", 1)[0]
+        cls._install_fast_upload(cls.bot)
+        try:
+            await cls.bot.warm_fast_upload_sessions()
+        except Exception:
+            pass
         LOGGER.info(f"WZ Bot : [@{cls.BNAME}] Started!")
 
     @classmethod
@@ -790,6 +855,11 @@ class TgClient:
                     no_updates=True,
                 )
                 await cls.user.start()
+                cls._install_fast_upload(cls.user)
+                try:
+                    await cls.user.warm_fast_upload_sessions()
+                except Exception:
+                    pass
                 me = cls.user.me or await cls.user.get_me()
                 cls.IS_PREMIUM_USER = bool(getattr(me, "is_premium", False))
                 cls.user._is_premium_cached = cls.IS_PREMIUM_USER

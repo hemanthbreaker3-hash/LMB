@@ -38,8 +38,44 @@ class HypertgUpload(HypertgTransfer):
     async def _progress(self, current, total, file_path):
         if self._listener.is_cancelled:
             raise StopTransmission()
+        from time import time as _now
+
+        # Start the speed clock on the first real byte so status does not
+        # average in session warm-up / caption / thumb prep as "slow upload".
+        if not getattr(self._obj, "_speed_clock_started", False) and current > 0:
+            now = _now()
+            self._obj._start_time = now
+            self._obj._speed_clock_started = True
+            self._obj._processed_bytes = 0
+            self._obj._speed_samples = []
+            self._obj._instant_speed = 0.0
+            self._file_progress.clear()
+        prev_total = sum(self._file_progress.values())
         self._file_progress[file_path] = current
-        self._obj._processed_bytes = sum(self._file_progress.values())
+        total_done = sum(self._file_progress.values())
+        self._obj._processed_bytes = total_done
+
+        # Sliding-window speed (~last 1.5s): status shows live MTProto rate
+        # from the first parts instead of a slow-rising lifetime average.
+        now = _now()
+        samples = getattr(self._obj, "_speed_samples", None)
+        if samples is None:
+            samples = []
+            self._obj._speed_samples = samples
+        samples.append((now, total_done))
+        cutoff = now - 1.5
+        while len(samples) > 2 and samples[0][0] < cutoff:
+            samples.pop(0)
+        if len(samples) >= 2:
+            dt = samples[-1][0] - samples[0][0]
+            db = samples[-1][1] - samples[0][1]
+            if dt > 0.05 and db >= 0:
+                self._obj._instant_speed = db / dt
+        elif total_done > prev_total:
+            self._obj._instant_speed = max(
+                getattr(self._obj, "_instant_speed", 0.0),
+                (total_done - prev_total) / 0.05,
+            )
 
     async def upload(
         self,

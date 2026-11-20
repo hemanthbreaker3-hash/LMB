@@ -40,7 +40,16 @@ class TelegramStatus:
         return f"{round(progress_raw, 2)}%"
 
     def speed(self):
-        return f"{get_readable_file_size(self._obj.speed)}/s"
+        # Bytes/sec + Mbps so ≥200 Mbps class is obvious
+        # (e.g. 25 MB/s ≈ 200 Mbps). 1 byte/s = 8 bit/s.
+        bps = float(getattr(self._obj, "speed", 0) or 0)
+        human = get_readable_file_size(bps)
+        mbps = (bps * 8) / 1_000_000
+        if mbps >= 10:
+            return f"{human}/s (~{mbps:.0f} Mbps)"
+        if mbps >= 1:
+            return f"{human}/s (~{mbps:.1f} Mbps)"
+        return f"{human}/s"
 
     def eta(self):
         try:

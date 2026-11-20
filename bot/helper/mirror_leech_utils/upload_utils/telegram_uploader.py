@@ -950,8 +950,15 @@ class TelegramUploader:
 
     @property
     def speed(self):
+        """Prefer recent-window throughput so status reflects live MTProto speed."""
         try:
-            return self._processed_bytes / (time() - self._start_time)
+            instant = float(getattr(self, "_instant_speed", 0) or 0)
+            if instant > 0:
+                return instant
+            elapsed = time() - self._start_time
+            if elapsed <= 0.05:
+                elapsed = 0.05
+            return self._processed_bytes / elapsed
         except ZeroDivisionError:
             return 0
 
