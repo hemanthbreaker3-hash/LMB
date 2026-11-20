@@ -52,15 +52,17 @@ async def add_direct_download(listener, path):
     a2c_opt = {
         "follow-torrent": "false",
         "follow-metalink": "false",
-        "max-connection-per-server": "16",
-        "split": "16",
-        "min-split-size": "1M",
+        "max-connection-per-server": "32",
+        "split": "32",
+        "min-split-size": "512K",
         "piece-length": "1M",
-        "disk-cache": "256M",
+        "disk-cache": "512M",
         "file-allocation": "none",
         "max-file-not-found": "0",
         "stream-piece-selector": "geom",
         "continue": "true",
+        "optimize-concurrent-downloads": "true",
+        "lowest-speed-limit": "0",
     }
     if header := details.get("header"):
         a2c_opt["header"] = header

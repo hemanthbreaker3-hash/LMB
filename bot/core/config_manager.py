@@ -152,9 +152,10 @@ class Config:
     LEECH_SPLIT_SIZE = BOT_MAX_BYTES
     MEDIA_GROUP = False
     USE_HYPER = True
+    # 0 = auto (use full helper pool, high worker floor). Pipeline/chunk start at max.
     HYPER_THREADS = 0
-    HYPER_PIPELINE = 64
-    HYPER_CHUNK = 8 * 1024 * 1024
+    HYPER_PIPELINE = 128
+    HYPER_CHUNK = 1024 * 1024  # Telegram GetFile max; clamped in HypertgDownload
     MEM_BUDGET = 0
     MEM_DEEP_STATS = False
     STREAM_PIPELINE = 32

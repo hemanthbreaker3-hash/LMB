@@ -56,29 +56,33 @@ async def _pick_clients(wl, clients, count):
 
 class HypertgDownload(HypertgTransfer):
     KB = 1024
-    _MIN_CHUNK = 64 * KB
-    _DEFAULT_PIPELINE = 64
-    _MIN_PIPELINE = 4
+    # Telegram GetFile hard limit is 1 MiB per request; use the max from part 1.
+    _MIN_CHUNK = 256 * KB
+    _DEFAULT_PIPELINE = 128
+    _MIN_PIPELINE = 16
     _MAX_PIPELINE_MULT = 4
-    _LOW_WORKERS = 2
-    _HIGH_WORKERS = max(8, len(allowed_cpus()) * 2)
+    _LOW_WORKERS = 4
+    _HIGH_WORKERS = max(16, len(allowed_cpus()) * 3)
     _MAX_RETRIES = 4
 
     def __init__(self, obj):
         super().__init__(obj)
-        # Telegram upload.GetFile requires a valid, aligned byte range. Keep
-        # the request size within Telegram's 1 MiB maximum and on 4 KiB boundaries.
-        requested_chunk = int(Config.HYPER_CHUNK or 512 * self.KB)
+        # Always start at Telegram's 1 MiB max chunk (aligned to 4 KiB).
+        # No slow ramp — full size from the first GetFile request.
+        requested_chunk = int(Config.HYPER_CHUNK or 1024 * self.KB)
         requested_chunk = max(self._MIN_CHUNK, min(requested_chunk, 1024 * self.KB))
         self.chunk_size = max(
             self._MIN_CHUNK, (requested_chunk // (4 * self.KB)) * (4 * self.KB)
         )
+        # Prefer full helper pool immediately (no 2-worker floor ramp).
         self.num_parts = Config.HYPER_THREADS or max(
-            self._LOW_WORKERS, min(self._HIGH_WORKERS, self.num_clients)
+            self._LOW_WORKERS,
+            min(self._HIGH_WORKERS, max(self.num_clients, self._LOW_WORKERS)),
         )
         base_pipe = max(
             Config.HYPER_PIPELINE or self._DEFAULT_PIPELINE, self._MIN_PIPELINE
         )
+        # Keep deep pipeline per part so the first range is already saturated.
         self.pipeline_depth = max(
             base_pipe // max(self.num_parts, 1), self._MIN_PIPELINE
         )
@@ -266,9 +270,11 @@ class HypertgDownload(HypertgTransfer):
         first_off = start - (start % csz)
         first_trim = start - first_off
         last_byte = end - 1
-        window = self.pipeline_depth
+        # Start at the maximum pipeline window — no ascending ramp from min→max.
+        base_window = self.pipeline_depth
         min_win = self._MIN_PIPELINE
-        max_win = window * self._MAX_PIPELINE_MULT
+        max_win = max(base_window * self._MAX_PIPELINE_MULT, min_win)
+        window = max_win
         inflight = set()
         _inflight_offsets = {}
         cur = first_off
@@ -694,7 +700,8 @@ class HypertgDownload(HypertgTransfer):
             cidx = await _pick_clients(self.work_loads, use_clients, use_count)
 
         n_use = len(cidx)
-        min_part = 1 * MB
+        # Small min_part so multi-client parallelism engages from the first MB.
+        min_part = max(self.chunk_size, 256 * self.KB)
         n_parts = (
             min(n_use, max(1, self.file_size // min_part))
             if self.file_size >= min_part

@@ -36,3 +36,25 @@ Configure in bot settings (sudo):
 - Linux: `wzgram[fast]>=3.1.5` (fast extra / uvloop where supported).
 - Windows: `wzgram>=3.1.5` without the Linux-only speed extra.
 - Do not mix `wzgram` and older `wzxpyro` in the same environment.
+
+## Download speed (max from first part)
+
+Same philosophy as upload: full concurrency from the first request.
+
+### Telegram Hyper download (`HypertgDownload`)
+- Chunk size: **1 MiB** (Telegram GetFile maximum) from the first part
+- Workers: high floor (4+), up to 16 / CPU×3 across helper clients
+- Pipeline: starts at **max window** (no min→max ramp)
+- Part size floor: 256 KiB so multi-client ranges engage early
+
+### Aria2 / direct HTTP
+- `split` / `max-connection-per-server`: **32**
+- `min-split-size`: **512K**
+- `disk-cache`: **512M**, `file-allocation=none`
+- `optimize-concurrent-downloads=true`
+
+### yt-dlp
+- `concurrent_fragment_downloads`: **16**
+- `http_chunk_size`: 10 MiB, larger buffer
+
+Configure helpers with `HELPER_TOKENS` / `HELPER_STRINGS` and keep `USE_HYPER=True` for Telegram media downloads.

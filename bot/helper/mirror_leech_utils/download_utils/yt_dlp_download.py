@@ -105,13 +105,17 @@ class YoutubeDLHelper:
             "writethumbnail": True,
             "trim_file_name": 220,
             "ffmpeg_location": f"/bin/{BinConfig.FFMPEG_NAME}",
-            "fragment_retries": 10,
-            "retries": 10,
+            "fragment_retries": 15,
+            "retries": 15,
+            # Max concurrent fragments from the first segment (no slow ramp).
+            "concurrent_fragment_downloads": 16,
+            "http_chunk_size": 10_485_760,  # 10 MiB chunks when supported
+            "buffersize": 1024 * 1024,
             "retry_sleep_functions": {
-                "http": lambda n: 3,
-                "fragment": lambda n: 3,
-                "file_access": lambda n: 3,
-                "extractor": lambda n: 3,
+                "http": lambda n: 2,
+                "fragment": lambda n: 2,
+                "file_access": lambda n: 2,
+                "extractor": lambda n: 2,
             },
         }
         cookie_to_use = get_cookie_file(self._listener.user_dict, self._listener.user_id)
