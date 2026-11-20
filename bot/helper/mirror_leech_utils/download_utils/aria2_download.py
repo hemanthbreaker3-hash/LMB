@@ -21,11 +21,11 @@ async def add_aria2_download(listener, dpath, header, ratio, seed_time):
         return
     a2c_opt = {
         "dir": dpath,
-        # Max-from-start throughput: full split/conn count immediately,
-        # tiny min-split so multi-connection engages on the first pieces.
-        "max-connection-per-server": "32",
-        "split": "32",
-        "min-split-size": "512K",
+        # Aria2 hard-limits max-connection-per-server to 1–16. Use 16 from the
+        # first piece so multi-connection starts immediately (no slow ramp).
+        "max-connection-per-server": "16",
+        "split": "16",
+        "min-split-size": "1M",
         "piece-length": "1M",
         "disk-cache": "512M",
         "file-allocation": "none",
@@ -36,8 +36,6 @@ async def add_aria2_download(listener, dpath, header, ratio, seed_time):
         "timeout": "60",
         "max-file-not-found": "0",
         "stream-piece-selector": "geom",
-        "optimize-concurrent-downloads": "true",
-        "lowest-speed-limit": "0",
     }
     if listener.name:
         a2c_opt["out"] = listener.name
