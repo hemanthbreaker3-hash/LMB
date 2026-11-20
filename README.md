@@ -1,6 +1,6 @@
-# CDML-X
+# LMB
 
-CDML-X is a Telegram mirror/leech bot for Linux VPS deployments. It supports download, media processing, Telegram uploads, user settings, verification, and video/audio track tools.
+**LMB** is a premium Telegram mirror/leech bot for Linux VPS deployments. It supports download, media processing, Telegram uploads, user settings, verification, and advanced video/audio tools.
 
 > **Deployment note:** A successful deployment depends on valid Telegram credentials, a reachable database, supported system packages, and a correctly configured VPS. Review the configuration and deployment logs rather than assuming that a build is guaranteed to succeed on every host.
 
@@ -54,11 +54,22 @@ The Video Tools workflow supports the operations exposed by the interactive menu
 - SubSync
 - Compress and Convert
 - Watermark
-- Extract and Trim
+- Extract and **multi-range Trim**
 - Remove Ads & Names
 - Audio Sync
 - Media Split → Binary
 - MULTI VT where supported
+
+**Trim** accepts one or many ranges:
+
+```text
+00:01:00 00:02:30
+00:01:00-00:02:30, 00:05:00-00:06:15, 01:10:00-01:12:00
+```
+
+Each range becomes its own clip when multiple ranges are supplied.
+
+The same multi-range trim format is available inside the `-ht` pre-upload menu. When merge is enabled via `-ht` (or auto-merge / `-m`), every task that shares the same `-m` folder uses the identical merge + trim + extract settings. When merge is disabled, the bot simply downloads, processes (including any trim), and uploads.
 
 Some resource-intensive tools may be restricted to authorized or sudo users. The bot enforces its configured permission checks.
 

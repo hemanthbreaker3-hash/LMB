@@ -22,23 +22,28 @@ new_name = """<b>Rename Task File:</b> -n
 
 <blockquote>Note: Does not work directly with multi-file torrents without selector.</blockquote>"""
 
-multi_link = """<b>Process Multiple Links:</b> -i
+multi_link = """<b>🔢 Process Multiple Links:</b> -i
 
 Reply to the first link or file with:
-<code>/cmd -i 10</code> (number of links to process)"""
+<code>/cmd -i 10</code> (number of links to process)
 
-same_dir = """<b>Move Files into Single Folder:</b> -m
+Works together with <code>-m</code>, <code>-vt</code>, and <code>-ht</code> so every sibling task shares the same folder / merge / trim settings."""
 
-Combine contents of multiple links or files into one output folder.
+same_dir = """<b>📁 Same-Folder / Merge Group:</b> -m
+
+Combine multiple links or files into one output folder. Works with <code>-i</code>, <code>-b</code>, and <code>-ht</code>.
 
 <code>/cmd link -m FolderName</code>
 <code>/cmd -i 10 -m FolderName</code>
+<code>/cmd -i 5 -m MyPack -ht</code>  (shared merge/trim settings)
 
-<blockquote>Example for bulk list:
+<blockquote>Bulk example:
 link1 -m Folder1
 link2 -m Folder1
 link3 -m Folder2
-link4</blockquote>"""
+link4</blockquote>
+
+When <code>-ht</code> is used with <code>-m</code>, the merge / trim / extract choices apply to every task in that folder group."""
 
 thumb = """<b>Custom Thumbnail:</b> -t
 
@@ -76,13 +81,14 @@ rcf = """<b>Custom Rclone Flags:</b> -rcf
 
 <blockquote>Overrides default flags except --exclude. Check <a href='https://rclone.org/flags/'>Rclone Flags Documentation</a>.</blockquote>"""
 
-bulk = """<b>Bulk Download Task:</b> -b
+bulk = """<b>📦 Bulk Download:</b> -b
 
-Reply to a message or text file with links separated by new line:
+Reply to a message or text file with one link per line:
 <code>/cmd -b</code>
 <code>/cmd -b start:end</code>
+<code>/cmd -b -m FolderName -ht</code>
 
-<blockquote>Use start:end range to process specific links from bulk file. Default starts from 0 to end.</blockquote>"""
+<blockquote>Use <code>start:end</code> to process a slice of the list. Combine with <code>-m</code> and <code>-ht</code> so all bulk items share the same folder and pre-upload options.</blockquote>"""
 
 rclone_dl = """<b>Rclone Download:</b>
 

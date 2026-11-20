@@ -2159,11 +2159,21 @@ class VidEcxecutor(FFProgress):
         return await self._final_path()
 
 
-    async def _vid_trimmer(self, start_time, end_time):
+    async def _vid_trimmer(self, start_time, end_time, trim_ranges=None):
         await self._queue(True)
         if self.is_cancel:
             return
+        # Accept either a single pair or a list of (start, end) pairs
+        ranges = []
+        if trim_ranges and isinstance(trim_ranges, (list, tuple)):
+            ranges = [(str(a), str(b)) for a, b in trim_ranges]
+        elif start_time and end_time:
+            ranges = [(str(start_time), str(end_time))]
+        if not ranges:
+            return self._up_path
+
         self.outfile = self._up_path
+        multi = len(ranges) > 1
         for file in (file_list := await self._get_files()):
             self.path = file
             if self._metadata:
@@ -2172,19 +2182,27 @@ class VidEcxecutor(FFProgress):
             else:
                 base_dir, self.size = await gather(
                     self._name_base_dir(self.path, 'Trim',
-                                        len(file_list) > 1),
+                                        len(file_list) > 1 or multi),
                     get_path_size(self.path))
-            self.outfile = ospath.join(base_dir, self.name)
+            stem, ext = ospath.splitext(self.name)
             self._files.append(self.path)
-            cmd = [
-                FFMPEG_NAME, '-hide_banner', '-ignore_unknown', '-i',
-                self.path, '-ss', start_time, '-to', end_time, '-map',
-                '0:v:0?', '-map', '0:a:?', '-map', '0:s:?', '-c:v', 'copy',
-                '-c:a', 'copy', '-c:s', 'copy', self.outfile, '-y'
-            ]
-            await self._run_cmd(cmd)
-            if self.is_cancel:
-                return
+            for idx, (ss, to) in enumerate(ranges, 1):
+                if self.is_cancel:
+                    return
+                if multi:
+                    out_name = f"{stem}_trim{idx:02d}{ext or '.mkv'}"
+                else:
+                    out_name = self.name
+                self.outfile = ospath.join(base_dir, out_name)
+                cmd = [
+                    FFMPEG_NAME, '-hide_banner', '-ignore_unknown', '-i',
+                    self.path, '-ss', ss, '-to', to, '-map',
+                    '0:v:0?', '-map', '0:a:?', '-map', '0:s:?', '-c:v', 'copy',
+                    '-c:a', 'copy', '-c:s', 'copy', self.outfile, '-y'
+                ]
+                await self._run_cmd(cmd)
+                if self.is_cancel:
+                    return
 
         return await self._final_path()
 

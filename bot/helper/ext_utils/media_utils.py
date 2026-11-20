@@ -1512,6 +1512,15 @@ class FFMpeg:
 
     async def trim_media(self, f_path, start_time, end_time):
         out_path = f"{f_path}.trim.mkv"
+        ok = await self.trim_media_to(f_path, start_time, end_time, out_path)
+        if ok:
+            await remove(f_path)
+            await move(out_path, f_path)
+            return f_path
+        return None
+
+    async def trim_media_to(self, f_path, start_time, end_time, out_path):
+        """Trim a segment into a new file without deleting the source."""
         cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -1519,20 +1528,25 @@ class FFMpeg:
             "error",
             "-y",
             "-ss",
-            start_time,
+            str(start_time),
             "-to",
-            end_time,
+            str(end_time),
             "-i",
             f_path,
+            "-map",
+            "0:v:0?",
+            "-map",
+            "0:a?",
+            "-map",
+            "0:s?",
             "-c",
             "copy",
             out_path,
         ]
         res, err, code = await cmd_exec(cmd)
         if code == 0 and await aiopath.exists(out_path):
-            await remove(f_path)
-            await move(out_path, f_path)
-            return f_path
+            return out_path
+        LOGGER.error(f"trim_media_to failed ({code}): {err}")
         return None
 
     async def extract_tracks(self, f_path, extract_types):

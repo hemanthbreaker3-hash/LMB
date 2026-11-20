@@ -30,8 +30,8 @@ async def choose_vt_mode(client, message, user_id, timeout=900):
         for key, label in VT_MODES:
             mark = "✅ " if state["mode"] == key else ""
             buttons.data_button(mark + label, f"vtmenu select {key}")
-        buttons.data_button("Cancel", "vtmenu cancel", "footer")
-        buttons.data_button("Done", "vtmenu done", "footer")
+        buttons.data_button("❌ Cancel", "vtmenu cancel", "footer")
+        buttons.data_button("✅ Done", "vtmenu done", "footer")
         return buttons.build_menu(2)
 
     async def callback(_, query):
@@ -42,13 +42,18 @@ async def choose_vt_mode(client, message, user_id, timeout=900):
         action = data[1]
         if action == "select" and len(data) >= 3:
             state["mode"] = data[2]
-            await state["reply"].edit_text("<b>🎬 VIDEO TOOLS</b>\n\n<blockquote><b>Selected Tool:</b> <b>✅ {}</b>\nChoose a tool, then press <b>Done</b>.</blockquote>".format(
-                dict((k, v) for k, v in VT_MODES).get(state["mode"], state["mode"])
-            ), reply_markup=build())
+            await state["reply"].edit_text(
+                "<b>💎 LMB · Video Tools</b>\n\n"
+                "<blockquote><b>Selected:</b> ✅ <b>{}</b>\n"
+                "Pick a tool, then press <b>Done</b>.</blockquote>".format(
+                    dict((k, v) for k, v in VT_MODES).get(state["mode"], state["mode"])
+                ),
+                reply_markup=build(),
+            )
             await query.answer("Selected")
         elif action == "done":
             if not state["mode"]:
-                await query.answer("Choose an operation first", show_alert=True)
+                await query.answer("Choose a tool first", show_alert=True)
                 return
             state["done"] = True
             event.set()
@@ -62,9 +67,14 @@ async def choose_vt_mode(client, message, user_id, timeout=900):
         group=-9,
     )
     try:
-        state["reply"] = await send_message(message,
-            "<b>🎬 VIDEO TOOLS</b>\n\n<blockquote>Choose a tool before downloading. The selected tool is marked with ✅. Press <b>Done</b> to continue.</blockquote>",
-            build(), block=False)
+        state["reply"] = await send_message(
+            message,
+            "<b>💎 LMB · Video Tools</b>\n\n"
+            "<blockquote>Select a tool before the download starts.\n"
+            "The active choice is marked with ✅. Press <b>Done</b> to continue.</blockquote>",
+            build(),
+            block=False,
+        )
         try:
             await wait_for(event.wait(), timeout=timeout)
         except TimeoutError:

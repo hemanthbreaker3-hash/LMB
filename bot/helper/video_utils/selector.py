@@ -135,7 +135,7 @@ class SelectMode():
         return 'Step'
 
     def _captions(self, mode: str = None):
-        msg = '<b>🎬 VIDEO TOOLS STUDIO</b>\n<blockquote>Fine-tune your media with a clear, guided workflow.</blockquote>'
+        msg = '<b>💎 LMB · Video Tools Studio</b>\n<blockquote>Fine-tune your media with a clean, guided workflow.</blockquote>'
         if self.multi_modes:
             chain = '\n'.join(
                 f'{i}. {self._queued_label(m, nm)}'
@@ -147,7 +147,11 @@ class SelectMode():
         if self.newname:
             msg += f'\nName: <code>{escape(self.newname)}</code>'
         if self.mode == 'trim' and self.extra_data:
-            msg += f'\nTrim Duration: <b>{self.extra_data.get("start_time", "")} – {self.extra_data.get("end_time", "")}</b>'
+            if ranges := self.extra_data.get('trim_ranges'):
+                pretty = ', '.join(f'{a}–{b}' for a, b in ranges)
+                msg += f'\n✂️ Trim Ranges: <b>{pretty}</b>'
+            else:
+                msg += f'\n✂️ Trim Duration: <b>{self.extra_data.get("start_time", "")} – {self.extra_data.get("end_time", "")}</b>'
         if self.mode == 'watermark':
             hardsub = self.extra_data.get('hardsub')
             msg += f"\nHardsub Mode: <b>{'Enable' if hardsub else 'Disable'}</b>"
@@ -203,7 +207,12 @@ class SelectMode():
                         '720p: <b>16-21</b>\n'
                         '480p: <b>11-16</b>')
             case 'trim':
-                msg += '\n\n<i>Send valid trim duration <b>hh:mm:ss hh:mm:ss</b></i>'
+                msg += (
+                    '\n\n<i>Send one or more trim ranges.</i>\n'
+                    '• Single: <b>hh:mm:ss hh:mm:ss</b>\n'
+                    '• Multiple: <b>00:01:00-00:02:30, 00:05:00-00:06:15</b>\n'
+                    'Each range becomes a separate clip when multiple are provided.'
+                )
             case 'audio_delay':
                 msg += '\n\n<i>Send audio delay in milliseconds. Example: <b>-5300</b> or <b>5300</b></i>'
             case 'remove_ads_names':
@@ -246,7 +255,7 @@ class SelectMode():
                     buttons.data_button(f"{'✅ ' if split_size == size else ''}{label}", f'vidtool binary_size {size}', 'header')
             buttons.data_button(f"{'✅ ' if self.multi_vt else ''}🧩 Multi-step", 'vidtool multivt', 'header')
             buttons.data_button(f'{"✅ " if self.newname else ""}Rename', 'vidtool rename', 'header')
-            buttons.data_button('✖ Cancel', 'vidtool cancel', 'footer')
+            buttons.data_button('❌ Cancel', 'vidtool cancel', 'footer')
             # Rename is a complete selectable operation even though it does not
             # use self.mode. Keep DONE visible after the user enters the name so
             # the operation only starts when the user explicitly presses DONE.
@@ -474,10 +483,29 @@ async def message_handler(_, message: Message, obj: SelectMode, is_sub=False, to
             await clean_target(fpath)
             data = 'wmsize'
     elif obj.mode == 'trim' and message.text:
-        if match := re_match(r'(\d{2}:\d{2}:\d{2})\s(\d{2}:\d{2}:\d{2})', message.text.strip()):
-            obj.extra_data.update({'start_time': match.group(1), 'end_time': match.group(2)})
+        raw = message.text.strip().replace("–", "-")
+        ranges = []
+        for chunk in raw.split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            m = re_match(r'(\d{1,2}:\d{2}:\d{2})\s*[- ]\s*(\d{1,2}:\d{2}:\d{2})', chunk)
+            if m:
+                ranges.append((m.group(1), m.group(2)))
+        if ranges:
+            obj.extra_data['start_time'] = ranges[0][0]
+            obj.extra_data['end_time'] = ranges[0][1]
+            if len(ranges) > 1:
+                obj.extra_data['trim_ranges'] = ranges
+            else:
+                obj.extra_data.pop('trim_ranges', None)
         else:
-            await sendMessage('Invalid trim duration format!', message)
+            await sendMessage(
+                '❌ Invalid trim format!\n'
+                'Use: <code>hh:mm:ss hh:mm:ss</code>\n'
+                'Or multiple: <code>00:01:00-00:02:30, 00:05:00-00:06:15</code>',
+                message,
+            )
             return
     elif obj.mode == 'subsync' and obj.extra_data.get('awaiting_audio_delay') and message.text:
         value = message.text.strip()

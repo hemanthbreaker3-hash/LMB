@@ -858,7 +858,7 @@ async def add_mega_download(listener, path):
 
         try:
             async_api = AsyncMega()
-            async_api.api = api = MegaApi("", mega_dir, "WZML-X", 4)
+            async_api.api = api = MegaApi("", mega_dir, "LMB", 4)
         except Exception as e:
             LOGGER.warning(f"Failed to initialize MegaApi SDK: {e}. Falling back to Python downloader.")
             sdk_failed = True
@@ -875,7 +875,7 @@ async def add_mega_download(listener, path):
         subfolder_handle = get_mega_subfolder_handle(listener.link)
 
         if is_folder:
-            async_api.folder_api = folder_api = MegaApi("", mega_dir, "WZML-X", 4)
+            async_api.folder_api = folder_api = MegaApi("", mega_dir, "LMB", 4)
 
             # Authenticate folder API with the configured premium MEGA account.
             if mega_email and mega_password:

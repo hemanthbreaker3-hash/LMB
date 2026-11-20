@@ -45,7 +45,6 @@ import os, runpy, shlex
 from pathlib import Path
 ns=runpy.run_path('config.py')
 keys={k for k in ns if k.isupper() and not k.startswith('__')}
-keys.update(k for k in os.environ if k.isupper() and k not in {'PATH','HOME','PWD','OLDPWD','SHELL','USER','LOGNAME','TERM','LANG','SHLVL','DEBIAN_FRONTEND'} and not k.startswith('SUDO_'))
 keys.update(('BOT_TOKEN','OWNER_ID','TELEGRAM_API','TELEGRAM_HASH','DATABASE_URL','CMD_SUFFIX','START_REPO_URL','START_REPO_BUTTON','START_UPDATE_URL','START_UPDATE_BUTTON','START_DEV_URL','START_DEV_BUTTON'))
 lines=[]
 for k in sorted(keys):

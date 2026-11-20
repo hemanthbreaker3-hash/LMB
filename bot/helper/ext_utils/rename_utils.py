@@ -167,7 +167,18 @@ def extract_media_metadata(filename: str, caption: str = "", file_details: dict 
                     metadata["LANGUAGE"] = langs
 
     # 7. Extract Title
-    metadata["TITLE"] = _detect_title(filename, caption, metadata)
+    preferred = ""
+    if isinstance(file_details, dict):
+        preferred = str(file_details.get("preferred_title") or "").strip()
+    if preferred:
+        metadata["TITLE"] = ospath.splitext(preferred)[0].strip() or preferred
+    else:
+        metadata["TITLE"] = _detect_title(filename, caption, metadata)
+
+    # Final safety: never leave TITLE empty when a filename exists.
+    if not metadata["TITLE"]:
+        stem = ospath.splitext(filename)[0].strip()
+        metadata["TITLE"] = stem or "Media"
 
     return metadata
 

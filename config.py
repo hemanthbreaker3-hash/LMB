@@ -60,8 +60,8 @@ MEM_BUDGET = 0
 MEM_DEEP_STATS = False
 
 # Telegraph
-AUTHOR_NAME = "WZML-X"
-AUTHOR_URL = "https://t.me/WZML_X"
+AUTHOR_NAME = "LMB"
+AUTHOR_URL = "https://t.me/LMB_Bot"
 
 # Task Limits
 DIRECT_LIMIT = 0
@@ -132,7 +132,7 @@ STOP_DUPLICATE = False
 INDEX_URL = ""
 
 # YT Tools
-YT_DESP = "Uploaded to YouTube by WZML-X bot"
+YT_DESP = "Uploaded to YouTube by LMB bot"
 YT_TAGS = ["telegram", "bot", "youtube"]
 YT_CATEGORY_ID = 22
 YT_PRIVACY_STATUS = "unlisted"

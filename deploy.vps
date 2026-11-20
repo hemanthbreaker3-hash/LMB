@@ -3,7 +3,6 @@ set -Eeuo pipefail
 SERVICE_NAME="cantarellabots_bot"
 POT_SERVICE_NAME="bgutil-ytdlp-pot-provider"
 APP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-cd "$APP_DIR"
 export DEBIAN_FRONTEND=noninteractive
 
 # Optional secure handoff file used when a non-root account needs sudo. This
@@ -19,19 +18,27 @@ if [[ "${EUID}" -ne 0 ]]; then
   # entire environment. This does not bypass sudo policy or grant permissions.
   ENV_HANDOFF="$(mktemp "${TMPDIR:-/tmp}/cdmlx-deploy-env.XXXXXX")" || exit 1
   chmod 600 "$ENV_HANDOFF"
-  # Pass every exported uppercase variable (including credentials not yet
-  # declared in config.py) through a private, shell-escaped handoff file.
-  while IFS= read -r -d '' entry; do
-    key="${entry%%=*}"
-    value="${entry#*=}"
-    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || continue
-    case "$key" in PATH|HOME|PWD|OLDPWD|SHELL|USER|LOGNAME|TERM|LANG|SHLVL|SUDO_*|DEBIAN_FRONTEND) continue ;; esac
-    printf '%s=%q\n' "$key" "$value" >> "$ENV_HANDOFF"
-  done < <(env -0)
-  # Ensure BOT_TOKEN is explicitly included when it is exported.
-  if [[ -v BOT_TOKEN ]] && ! grep -q '^BOT_TOKEN=' "$ENV_HANDOFF"; then
-    printf '%s=%q\n' BOT_TOKEN "$BOT_TOKEN" >> "$ENV_HANDOFF"
-  fi
+  # Discover every uppercase setting declared by config.py, then hand off
+  # every matching caller export. Newly added credentials work automatically.
+  mapfile -t DEPLOY_ENV_KEYS < <(python3 - <<'PY_KEYS'
+import runpy
+namespace = runpy.run_path("config.py")
+for key in namespace:
+    if key.isupper() and not key.startswith("__"):
+        print(key)
+for key in (
+    "START_REPO_URL", "START_REPO_BUTTON",
+    "START_UPDATE_URL", "START_UPDATE_BUTTON",
+    "START_DEV_URL", "START_DEV_BUTTON",
+):
+    print(key)
+PY_KEYS
+  )
+  for key in "${DEPLOY_ENV_KEYS[@]}"; do
+    if [[ -v "$key" ]]; then
+      printf '%s=%q\\n' "$key" "${!key}" >> "$ENV_HANDOFF"
+    fi
+  done
   if ! sudo -v; then
     rm -f "$ENV_HANDOFF"
     echo "WARNING: sudo is not permitted for this account. Switching to user-local deployment."
@@ -378,10 +385,9 @@ extra_keys = (
     "START_UPDATE_URL", "START_UPDATE_BUTTON",
     "START_DEV_URL", "START_DEV_BUTTON",
 )
-excluded_env = {"PATH", "HOME", "PWD", "OLDPWD", "SHELL", "USER", "LOGNAME", "TERM", "LANG", "SHLVL", "DEBIAN_FRONTEND"}
-exported_keys = [key for key in os.environ if key.isupper() and key not in excluded_env and not key.startswith("SUDO_")]
-keys = list(dict.fromkeys(keys + [key for key in extra_keys if key in os.environ] + exported_keys))
-# Exported values override config.py defaults, including custom credentials.
+keys = list(dict.fromkeys(keys + [key for key in extra_keys if key in os.environ]))
+# Include only config variables and the explicit start-menu overrides; prefer
+# the resolved process environment over config.py defaults.
 def env_value(key, default):
     if key in os.environ:
         return os.environ[key]

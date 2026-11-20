@@ -1,10 +1,38 @@
-# Telegram upload performance notes
+# Telegram upload performance notes (LMB)
 
-- Linux requirements use `wzgram[fast]>=3.1.5`; this is the latest version found during this update and requests the upstream fast extra (including uvloop where supported).
-- Windows requirements retain `wzgram>=3.1.5` to avoid installing a Linux-only speed extra.
-- The project already routes uploads through its HyperUP/MtprotoPool uploader and balances across configured helper clients. Configure multiple valid helper bot tokens for higher aggregate throughput.
-- `wzgram` and the older `wzxpyro` fork are not installed together: both provide the Pyrogram-compatible import namespace, and mixing them can cause module conflicts. This project currently imports `wzgram.Client`, so it remains on wzgram.
-- Actual throughput depends on VPS network, Telegram DC route, helper-account limits, file size, disk I/O, and FloodWaits. No library can guarantee a specific speed.
+## Target throughput
 
+- **wzgram + MTProto + Hyper** path is always used when `USE_HYPER=True` (default).
+- Fast upload starts at **full concurrency** (no slow 10→50 Mbps ramp).
+- Design target on a good VPS/DC path: **~300 Mbps minimum class**, up to **~700 Mbps** when the network and Telegram DC allow it.
+- No library can guarantee a fixed Mbps; real speed still depends on VPS uplink, DC route, FloodWaits, and helper accounts.
 
-WzGram dependency policy: requirements allow releases from 3.1.5 onward, and deployment scripts run `pip install --upgrade wzgram[fast]` so each deployment installs the newest release available. The PyPI release listing checked on 2026-10-29 showed 3.1.5 as the newest published version; requiring >=3.1.6 today would make installation fail until that version is published.
+## Fast MTProto settings (current)
+
+| Parameter | Value |
+|-----------|--------|
+| Part size | 512 KiB (Telegram max for big files) |
+| Media sessions | **8** always (no size-based ramp) |
+| Workers per session | **6** (48 workers ceiling) |
+| Min file size for fast path | **1 MB** |
+| `max_concurrent_transmissions` | **16** (env `WZGRAM_MAX_CONCURRENT`) |
+| Override sessions | env `WZGRAM_FAST_UPLOAD_SESSIONS` (4–8) |
+
+## Upload delivery path
+
+1. **Primary hop (high speed):** user session string (`USER_SESSION_STRING`) uploads to the sudo-configured **`LEECH_LOG_CHAT`** (bot settings → Leech Log Chat).
+2. **User DM:** bot copies from the leech chat to the requester’s private chat (**bot only**, no user session).
+3. **Extra dumps:** bot also copies to user `LEECH_DUMP_CHATS`, owner `LEECH_DUMP_CHATS`, command `-up` destinations, and FFmpeg key dumps.
+
+Configure in bot settings (sudo):
+
+- `LEECH_LOG_CHAT` — primary archive chat
+- `LEECH_DUMP_CHATS` — named additional dumps
+- `USER_SESSION_STRING` — required for the user-session primary hop
+- `HELPER_TOKENS` / `HELPER_STRINGS` — extra parallel clients for Hyper
+
+## Dependencies
+
+- Linux: `wzgram[fast]>=3.1.5` (fast extra / uvloop where supported).
+- Windows: `wzgram>=3.1.5` without the Linux-only speed extra.
+- Do not mix `wzgram` and older `wzxpyro` in the same environment.

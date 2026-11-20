@@ -204,11 +204,38 @@ class TaskConfig:
         self.user_id = self.user.id
         self.user_dict = user_data.get(self.user_id, {})
         self.metadata_processor = MetadataProcessor()
-        set_all_meta = self.user_dict.get("SET_ALL_METADATA_ENABLE", False) and self.user_dict.get("SET_ALL_METADATA")
+        set_all_meta = self.user_dict.get("SET_ALL_METADATA_ENABLE", False) and self.user_dict.get(
+            "SET_ALL_METADATA"
+        )
         if set_all_meta:
             v = self.user_dict.get("SET_ALL_METADATA")
-            parsed_v = v if isinstance(v, dict) else (self.metadata_processor.parse_string(v) if isinstance(v, str) else {})
-            # Apply the configured metadata to every media stream.
+            if isinstance(v, dict):
+                parsed_v = self.metadata_processor.parse_string(v)
+            elif isinstance(v, str) and v.strip():
+                # Plain branding string → expand to every supported field so
+                # Title and all other tags receive the same value.
+                parsed = self.metadata_processor.parse_string(v)
+                if len(parsed) == 1 and "title" in parsed:
+                    brand = parsed["title"]
+                    parsed_v = {
+                        field: brand
+                        for field in MetadataProcessor.ALLOWED_METADATA_FIELDS
+                    }
+                else:
+                    parsed_v = parsed
+            else:
+                parsed_v = {}
+            # Always ensure title is present when any value was configured.
+            if parsed_v and "title" not in {k.lower() for k in parsed_v}:
+                # Prefer writing_library / comment / first value as title fallback.
+                fallback = (
+                    parsed_v.get("writing_library")
+                    or parsed_v.get("comment")
+                    or next(iter(parsed_v.values()), "")
+                )
+                if fallback:
+                    parsed_v["title"] = str(fallback)
+            # Apply the same metadata to container + every stream type.
             self.default_metadata_dict = dict(parsed_v)
             self.video_metadata_dict = dict(parsed_v)
             self.audio_metadata_dict = dict(parsed_v)
@@ -217,10 +244,7 @@ class TaskConfig:
             # Generic metadata from user settings is the base for every stream.
             # Stream-specific settings override matching generic keys.
             raw_default = self.user_dict.get("METADATA", {})
-            if isinstance(raw_default, dict):
-                default_meta = self.metadata_processor.parse_string(raw_default)
-            else:
-                default_meta = self.metadata_processor.parse_string(raw_default)
+            default_meta = self.metadata_processor.parse_string(raw_default)
             raw_audio = self.user_dict.get("AUDIO_METADATA", {})
             raw_video = self.user_dict.get("VIDEO_METADATA", {})
             raw_subtitle = self.user_dict.get("SUBTITLE_METADATA", {})
@@ -1652,27 +1676,54 @@ class TaskConfig:
 
         file_details = getattr(self, "file_details", None) or {}
         caption = file_details.get("caption") or ""
+        # Prefer command/custom name as TITLE when the user already set -n.
+        preferred_title = (getattr(self, "name", None) or "").strip()
+        if preferred_title and preferred_title not in (ospath.basename(dl_path), ""):
+            # Only use as title seed if it does not look like a pure folder id.
+            if not preferred_title.isdigit():
+                file_details = {**file_details, "preferred_title": preferred_title}
+
+        def _rename_one(path, name):
+            metadata = extract_media_metadata(name, caption, file_details)
+            if not metadata.get("TITLE") and preferred_title:
+                metadata["TITLE"] = ospath.splitext(preferred_title)[0]
+            new_name = format_auto_rename(format_template, metadata)
+            if not new_name or new_name == name:
+                return None
+            # Avoid illegal path characters on all platforms.
+            new_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", new_name).strip(" .")
+            if not new_name:
+                return None
+            return new_name
 
         if self.is_file:
             up_dir = ospath.dirname(dl_path)
             file_name = ospath.basename(dl_path)
-            metadata = extract_media_metadata(file_name, caption, file_details)
-            new_name = format_auto_rename(format_template, metadata)
-            if not new_name or new_name == file_name:
+            new_name = _rename_one(dl_path, file_name)
+            if not new_name:
                 return dl_path
             new_path = ospath.join(up_dir, new_name)
+            if new_path != dl_path and await aiopath.exists(new_path):
+                base, ext = ospath.splitext(new_name)
+                new_path = ospath.join(up_dir, f"{base}_{self.mid}{ext}")
+                new_name = ospath.basename(new_path)
             await move(dl_path, new_path)
             self.name = new_name
+            LOGGER.info(f"Auto rename: {file_name} → {new_name}")
             return new_path
         else:
             for dirpath, _, files in await sync_to_async(walk, dl_path, topdown=False):
                 for file_ in files:
                     f_path = ospath.join(dirpath, file_)
-                    metadata = extract_media_metadata(file_, caption, file_details)
-                    new_name = format_auto_rename(format_template, metadata)
-                    if not new_name or new_name == file_:
+                    new_name = _rename_one(f_path, file_)
+                    if not new_name:
                         continue
-                    await move(f_path, ospath.join(dirpath, new_name))
+                    dest = ospath.join(dirpath, new_name)
+                    if dest != f_path and await aiopath.exists(dest):
+                        base, ext = ospath.splitext(new_name)
+                        dest = ospath.join(dirpath, f"{base}_{self.mid}{ext}")
+                    await move(f_path, dest)
+                    LOGGER.info(f"Auto rename: {file_} → {ospath.basename(dest)}")
             return dl_path
 
     async def substitute(self, dl_path):
@@ -2119,12 +2170,26 @@ class TaskConfig:
     async def proceed_trim(self, dl_path, gid):
         if not dl_path or not await aiopath.exists(dl_path):
             return dl_path
-        trim_range = getattr(self, "trim_range", "")
+        trim_range = getattr(self, "trim_range", "") or ""
         if not trim_range or "-" not in trim_range:
             return dl_path
-        parts = trim_range.split("-")
-        start_t = parts[0].strip()
-        end_t = parts[1].strip()
+
+        # Support multiple ranges:
+        #   "00:01:00-00:02:00, 00:05:00-00:06:30"
+        # or space-separated pairs: "00:01:00 00:02:00, 00:05:00 00:06:30"
+        ranges = []
+        for chunk in trim_range.replace("–", "-").split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            if "-" in chunk:
+                parts = [p.strip() for p in chunk.split("-", 1)]
+            else:
+                parts = chunk.split()
+            if len(parts) >= 2 and parts[0] and parts[1]:
+                ranges.append((parts[0], parts[1]))
+        if not ranges:
+            return dl_path
 
         all_files = [dl_path] if self.is_file else []
         if not self.is_file:
@@ -2137,12 +2202,39 @@ class TaskConfig:
             return dl_path
 
         ffmpeg = FFMpeg(self)
+        multi = len(ranges) > 1
         for f_path in all_files:
             if self.is_cancelled:
                 return False
-            async with task_dict_lock:
-                task_dict[self.mid] = FFmpegStatus(self, ffmpeg, gid, "Trimming")
-            await ffmpeg.trim_media(f_path, start_t, end_t)
+            base_dir = ospath.dirname(f_path)
+            stem, ext = ospath.splitext(ospath.basename(f_path))
+            for idx, (start_t, end_t) in enumerate(ranges, 1):
+                if self.is_cancelled:
+                    return False
+                async with task_dict_lock:
+                    task_dict[self.mid] = FFmpegStatus(
+                        self, ffmpeg, gid, f"Trim {idx}/{len(ranges)}"
+                    )
+                if multi:
+                    out_name = f"{stem}_trim{idx:02d}{ext or '.mkv'}"
+                    out_path = ospath.join(base_dir, out_name)
+                    ok = await ffmpeg.trim_media_to(
+                        f_path, start_t, end_t, out_path
+                    )
+                    if not ok:
+                        LOGGER.warning(
+                            f"Trim segment {idx} failed for {f_path}"
+                        )
+                else:
+                    await ffmpeg.trim_media(f_path, start_t, end_t)
+            if multi and await aiopath.exists(f_path):
+                # Keep original only when single range; multi produces clips
+                try:
+                    await remove(f_path)
+                except Exception:
+                    pass
+                if self.is_file:
+                    self.is_file = False
         return dl_path
 
     async def proceed_extract_content(self, dl_path, gid):

@@ -95,28 +95,32 @@ class TelegramUploader:
         # user session for private-message delivery.
         self._bot_pm = True
 
-        # WZML-compatible custom thumbnail resolution:
-        # explicit command thumbnail -> saved user thumbnail -> conventional
-        # per-user thumbnail path. Respect an explicit "none" mode.
+        # Thumbnail resolution order:
+        # 1) explicit -t / "none"
+        # 2) THUMBNAIL_MODE: custom | auto | random | none
+        # 3) saved user thumbnail file
+        # 4) AUTO_THUMBNAIL → leave None so HypertgUpload fetches artwork
         explicit_thumb = self._listener.thumb
         mode = str(user_dict.get("THUMBNAIL_MODE") or "").strip().lower()
         saved_thumb = user_dict.get("THUMBNAIL") or f"thumbnails/{self._listener.user_id}.jpg"
+        auto_thumb_on = user_dict.get("AUTO_THUMBNAIL")
+        if auto_thumb_on is None:
+            auto_thumb_on = getattr(Config, "AUTO_THUMBNAIL", True)
 
         if explicit_thumb == "none" or mode == "none":
             self._thumb = "none"
-        elif explicit_thumb:
+        elif explicit_thumb and explicit_thumb != "none":
             self._thumb = explicit_thumb
         elif mode == "custom":
+            self._thumb = saved_thumb if await aiopath.isfile(saved_thumb) else None
+        elif mode in ("auto", "random"):
+            self._thumb = None  # resolved later by auto-thumbnail path
+        elif user_dict.get("THUMBNAIL") and await aiopath.isfile(str(user_dict.get("THUMBNAIL"))):
+            self._thumb = user_dict.get("THUMBNAIL")
+        elif await aiopath.isfile(saved_thumb):
             self._thumb = saved_thumb
-        elif mode == "auto":
-            self._thumb = None
-        elif mode == "random":
-            # Random mode is handled by the existing automatic artwork path.
-            self._thumb = None
-        elif user_dict.get("THUMBNAIL") or await aiopath.isfile(saved_thumb):
-            # Match WZML's behavior: a configured custom thumbnail is applied
-            # even when older user records do not contain THUMBNAIL_MODE.
-            self._thumb = saved_thumb
+        elif auto_thumb_on:
+            self._thumb = None  # HypertgUpload will call get_auto_thumbnail
         else:
             self._thumb = None
 
@@ -126,8 +130,8 @@ class TelegramUploader:
                 self._thumb = None
             else:
                 # Telegram upload thumbnails must be JPEG, <=320x320 and <200 KB.
-                formatted = await sync_to_async(format_tg_thumbnail, self._thumb)
-                if formatted:
+                formatted = await sync_to_async(format_tg_thumbnail, self._thumb, None, True)
+                if formatted and await aiopath.isfile(formatted):
                     self._thumb = formatted
                 else:
                     LOGGER.warning(f"Could not format thumbnail: {self._thumb}")
@@ -135,19 +139,31 @@ class TelegramUploader:
 
         self._hd_thumb = None
         if self._thumb not in (None, "none") and user_dict.get("HD_THUMBNAIL"):
-            self._hd_thumb = (
-                explicit_thumb if explicit_thumb and explicit_thumb != "none"
-                else saved_thumb
+            source = (
+                explicit_thumb
+                if explicit_thumb and explicit_thumb != "none" and await aiopath.isfile(explicit_thumb)
+                else (saved_thumb if await aiopath.isfile(saved_thumb) else self._thumb)
             )
-            if not await aiopath.isfile(self._hd_thumb):
-                self._hd_thumb = self._thumb
+            hd = await sync_to_async(format_tg_thumbnail, source, None, True)
+            self._hd_thumb = hd if hd and await aiopath.isfile(hd) else self._thumb
 
     async def _msg_to_reply(self):
         if self._user_session and TgClient.user is None:
             self._user_session = False
 
+        # Prefer sudo-configured leech chat as the PRIMARY upload target.
+        # User session (if present) uploads there first at full MTProto speed;
+        # the bot then copies to user DM + dumps (no user session on those hops).
+        leech_chat = Config.LEECH_LOG_CHAT or getattr(self._listener, "up_dest", None)
+        if leech_chat and not getattr(self._listener, "up_dest", None):
+            self._listener.up_dest = leech_chat
+
+        if TgClient.user is not None and (Config.LEECH_LOG_CHAT or self._listener.up_dest):
+            # Always prefer user session for the primary high-speed upload hop.
+            self._user_session = True
+
         if not self._listener.up_dest and not Config.LEECH_LOG_CHAT:
-            # Uploading directly to User PM through TgClient.bot
+            # No leech chat configured — upload directly to User PM via bot only.
             if self._listener.pm_msg is not None:
                 self._sent_msg = self._listener.pm_msg
             elif self._listener.message.chat.type == ChatType.PRIVATE:
@@ -157,7 +173,10 @@ class TelegramUploader:
                     self._sent_msg = await _call_with_flood_retry(
                         TgClient.bot.send_message,
                         chat_id=self._listener.user_id,
-                        text=f"<b>Task Started:</b> <a href='{self._listener.source_url}'>Click Here</a>",
+                        text=(
+                            f"<b>💎 LMB · Task Started</b>\n"
+                            f"<a href='{self._listener.source_url}'>Source</a>"
+                        ),
                         link_preview_options=LinkPreviewOptions(is_disabled=True),
                         disable_notification=True,
                     )
@@ -171,6 +190,7 @@ class TelegramUploader:
             self._is_private = True
             return True
 
+        # Anchor reply in the command chat; actual bytes go to leech chat via user session.
         self._sent_msg = self._listener.message
         self._is_private = self._sent_msg.chat.type == ChatType.PRIVATE
         return True

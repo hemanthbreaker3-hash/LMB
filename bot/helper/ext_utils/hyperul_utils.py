@@ -72,18 +72,31 @@ class HypertgUpload(HypertgTransfer):
             elif is_audio and not is_video:
                 thumb = await get_audio_thumbnail(file_path)
 
-        if not is_image and thumb is None and user_thumb is None:
-            user_dict = self._listener.user_dict
-            if user_dict.get("AUTO_THUMBNAIL") or (
-                "AUTO_THUMBNAIL" not in user_dict and Config.AUTO_THUMBNAIL
-            ):
+        if not is_image and thumb is None and user_thumb not in ("none",):
+            # user_thumb is None when mode=auto or no custom file — run auto path.
+            user_dict = self._listener.user_dict or {}
+            mode = str(user_dict.get("THUMBNAIL_MODE") or "").strip().lower()
+            auto_on = user_dict.get("AUTO_THUMBNAIL")
+            if auto_on is None:
+                auto_on = getattr(Config, "AUTO_THUMBNAIL", True)
+            if mode in ("auto", "random", "") and auto_on:
                 try:
+                    from ..ext_utils.media_utils import format_tg_thumbnail
+                    from ..ext_utils.bot_utils import sync_to_async
+
                     thumb = await get_auto_thumbnail(
-                        self._up_file or self._listener.name,
+                        self._up_file or self._listener.name or file_path,
                         force_document or self._listener.as_doc,
                     )
+                    if thumb and await aiopath.isfile(thumb):
+                        formatted = await sync_to_async(
+                            format_tg_thumbnail, thumb, None, True
+                        )
+                        if formatted and await aiopath.isfile(formatted):
+                            thumb = formatted
                 except Exception as e:
                     LOGGER.warning(f"Auto thumbnail failed: {e}")
+                    thumb = None
 
         duration = 0
         width = 480
@@ -151,22 +164,24 @@ class HypertgUpload(HypertgTransfer):
         )
 
         if is_private_dm_target:
-            # Sending to user DM must go through TgClient.bot only (never helper bots or raw user DM)
+            # User DM: bot-only delivery. >2 GiB uses user-session bridge then bot copy.
             use_hyper = False
             if up_size > 2097152000 and TgClient.user is not None:
                 user_session = True
             else:
                 user_session = False
-        elif up_size > 2097152000 and (TgClient.user or any(k < 0 for k in self.clients)):
-            if TgClient.user:
-                use_hyper = False
-                user_session = True
-            else:
-                use_hyper = True
-                hyper_user_only = True
-                user_session = False
+        elif TgClient.user is not None:
+            # Primary leech/dump chat: always use user session for max MTProto speed.
+            # Bot later copies to user DM + additional dumps (no session on those hops).
+            use_hyper = False
+            user_session = True
+        elif up_size > 2097152000 and any(k < 0 for k in self.clients):
+            use_hyper = True
+            hyper_user_only = True
+            user_session = False
         else:
-            use_hyper = Config.USE_HYPER and self.clients and up_size > 10 * 1024 * 1024
+            # Helper bots / Hyper path for parallel multi-client uploads when no user session.
+            use_hyper = Config.USE_HYPER and bool(self.clients) and up_size > 1 * 1024 * 1024
 
         try:
             if use_hyper:

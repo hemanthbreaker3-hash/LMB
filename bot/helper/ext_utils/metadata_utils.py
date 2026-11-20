@@ -229,23 +229,33 @@ class MetadataProcessor:
 
     @staticmethod
     def route_global_title_to_video(global_metadata, video_metadata, streams):
-        """Avoid writing a duplicate title at container level when a video exists.
+        """Ensure Title is written on the container AND the primary video stream.
 
-        Stream-specific metadata dictionaries independently apply configured values
-        to video, audio, and subtitle streams. Attached cover art is not a video.
+        Previous behaviour removed container title and only set the video stream,
+        which left many players showing the original release title. Now the
+        configured title always replaces both container and video-stream title
+        (unless the video dict already has an explicit non-empty title that was
+        set by VIDEO_METADATA / SET_ALL — in that case we still keep container).
         """
         if not isinstance(global_metadata, dict):
             return
-        title_items = [(key, value) for key, value in global_metadata.items()
-                       if str(key).strip().lower() == "title"]
+        title_items = [
+            (key, value)
+            for key, value in list(global_metadata.items())
+            if str(key).strip().lower() == "title"
+        ]
         if not title_items:
             return
-        # Last configured generic title wins, then remove all case variants.
+        # Last configured generic title wins; normalise to a single "title" key.
         title_value = title_items[-1][1]
         for key, _ in title_items:
             global_metadata.pop(key, None)
         if title_value is None or not str(title_value).strip():
             return
+        title_str = str(title_value).strip()
+        # Always set / replace container Title — this is what most players show.
+        global_metadata["title"] = title_str
+
         has_video = any(
             str(stream.get("codec_type", "")).lower() == "video"
             and not bool((stream.get("disposition") or {}).get("attached_pic", 0))
@@ -253,12 +263,17 @@ class MetadataProcessor:
         )
         if not has_video or not isinstance(video_metadata, dict):
             return
-        # Preserve an explicit video-stream title, which takes precedence over
-        # general metadata. Usually the title is already present because generic
-        # user settings are copied to each stream in TaskConfig.
-        if any(str(key).strip().lower() == "title" for key in video_metadata):
-            return
-        video_metadata["title"] = str(title_value)
+        # Replace video-stream title as well so stream metadata matches container.
+        # Explicit empty values are treated as "unset" and get the global title.
+        existing = None
+        for key in list(video_metadata.keys()):
+            if str(key).strip().lower() == "title":
+                existing = video_metadata.pop(key)
+        if existing is not None and str(existing).strip():
+            # Keep explicit non-empty video title, but still ensure container has one.
+            video_metadata["title"] = str(existing).strip()
+        else:
+            video_metadata["title"] = title_str
 
     async def process_all(
         self,

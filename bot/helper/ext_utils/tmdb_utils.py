@@ -446,7 +446,7 @@ def _public_json(url, params=None, payload=None):
     if params:
         url += ("&" if "?" in url else "?") + urlencode(params)
     data = None if payload is None else _json.dumps(payload).encode("utf-8")
-    headers = {"User-Agent": "CDML-X/1.0 (thumbnail metadata)", "Accept": "application/json"}
+    headers = {"User-Agent": "LMB/1.0 (thumbnail metadata)", "Accept": "application/json"}
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = Request(url, data=data, headers=headers)

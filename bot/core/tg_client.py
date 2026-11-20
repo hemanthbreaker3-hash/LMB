@@ -238,8 +238,13 @@ class TgClient:
 
         # Telegram SaveBigFilePart hard limit is 512 KiB.
         PART_SIZE = 512 * 1024
-        # Start parallel path earlier so more files benefit.
-        MIN_FAST_SIZE = 5 * 1024 * 1024
+        # Aggressive path: parallel MTProto from the first megabyte so speed
+        # starts near the high end (target 300–700 Mbps class) instead of
+        # ramping slowly from ~10–50 Mbps.
+        MIN_FAST_SIZE = 1 * 1024 * 1024
+        # Hard ceiling for media sessions / concurrent workers.
+        MAX_SESSIONS = 8
+        WORKERS_PER_SESSION = 6
 
         async def _close_media_sessions():
             async with client._fast_upload_lock:
@@ -316,13 +321,10 @@ class TgClient:
             try:
                 env_sessions = int(os.environ.get("WZGRAM_FAST_UPLOAD_SESSIONS", "0") or 0)
                 if env_sessions > 0:
-                    pool_size = max(2, min(8, env_sessions))
+                    pool_size = max(4, min(MAX_SESSIONS, env_sessions))
                 else:
-                    # Always push toward the 8-session ceiling for max MTProto parallelism.
-                    if file_size < 64 * 1024 * 1024:
-                        pool_size = 6
-                    else:
-                        pool_size = 8
+                    # Always start at the full session ceiling — no slow ramp.
+                    pool_size = MAX_SESSIONS
                 sessions = await _get_media_sessions(pool_size=pool_size)
                 if not sessions:
                     return await orig_save_file(
@@ -418,8 +420,9 @@ class TgClient:
                         with suppress(Exception):
                             queue.task_done()
 
-            # 4 workers per media session keeps MTProto lanes saturated for ~200 Mbps class links.
-            num_workers = min(total_parts, max(len(sessions) * 4, len(sessions)))
+            # 6 workers per media session: saturate MTProto for 300–700 Mbps class links.
+            # No ascending ramp — full concurrency from the first part.
+            num_workers = min(total_parts, max(len(sessions) * WORKERS_PER_SESSION, len(sessions)))
             workers = [create_task(_worker(i)) for i in range(num_workers)]
             try:
                 await gather(*workers, return_exceptions=True)
@@ -458,7 +461,8 @@ class TgClient:
         client.save_file = _fast_save_file
         client._wz_fast_upload_installed = True
         LOGGER.info(
-            "wzgram fast upload installed (target ~200 Mbps class; sessions<=8, workers=4x sessions, part=512KiB)"
+            "LMB wzgram fast upload installed "
+            "(target 300–700 Mbps; sessions=8, workers=6x sessions, part=512KiB, min=1MB, no ramp)"
         )
         return client
 
@@ -474,7 +478,7 @@ class TgClient:
         kwargs.setdefault("workdir", str(SESSION_STORAGE_DIR))
         kwargs["in_memory"] = False
         for param, value in {
-            "max_concurrent_transmissions": int(os.environ.get("WZGRAM_MAX_CONCURRENT", "8")),
+            "max_concurrent_transmissions": int(os.environ.get("WZGRAM_MAX_CONCURRENT", "16")),
             "skip_updates": False,
         }.items():
             if param in signature(Client.__init__).parameters:

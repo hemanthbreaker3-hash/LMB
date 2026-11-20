@@ -303,6 +303,14 @@ class Mirror(TaskListener):
         if user_auto_merge:
             self.auto_merge = True
             self.merge_mode = self.user_dict.get("AUTO_MERGE_MODE", "normal")
+        # -i N -m FolderName: when merge is enabled (settings or later -vt/-ht),
+        # all multi downloads land in the same folder and the leader merges
+        # before upload. Folder-only multi without merge still just collects files.
+        if self.folder_name and user_auto_merge:
+            self.auto_merge = True
+            self.merge_mode = self.user_dict.get(
+                "AUTO_MERGE_MODE", getattr(self, "merge_mode", "normal")
+            )
 
 
         self.ht_flag = bool(args["-ht"] or "-ht" in self.options)
@@ -488,34 +496,35 @@ class Mirror(TaskListener):
 
                 def build_ht_menu(mid):
                     t_info = ht_tasks.get(mid, {})
-                    m_on = "✓ ON" if t_info.get("merge") else "OFF"
+                    m_on = "✅ ON" if t_info.get("merge") else "OFF"
                     m_mode = t_info.get("merge_mode", "normal")
-                    tr_on = "✓ ON" if t_info.get("trim") else "OFF"
-                    ex_on = "✓ ON" if t_info.get("extract") else "OFF"
+                    tr_on = "✅ ON" if t_info.get("trim") else "OFF"
+                    ex_on = "✅ ON" if t_info.get("extract") else "OFF"
 
                     buttons = ButtonMaker()
-                    buttons.data_button(f"Merge: {m_on}", f"htmerge merge {mid}", position="header")
+                    buttons.data_button(f"🔀 Merge: {m_on}", f"htmerge merge {mid}", position="header")
                     if t_info.get("merge"):
-                        n_st = "✓ " if m_mode == "normal" else ""
-                        a_st = "✓ " if m_mode == "advanced" else ""
-                        buttons.data_button(f"{n_st}Normal Mode", f"htmerge setmode {mid} normal")
-                        buttons.data_button(f"{a_st}Advanced Mode", f"htmerge setmode {mid} advanced")
+                        n_st = "✅ " if m_mode == "normal" else ""
+                        a_st = "✅ " if m_mode == "advanced" else ""
+                        buttons.data_button(f"{n_st}Normal", f"htmerge setmode {mid} normal")
+                        buttons.data_button(f"{a_st}Advanced", f"htmerge setmode {mid} advanced")
 
-                    buttons.data_button(f"Trim: {tr_on}", f"htmerge trim {mid}")
-                    buttons.data_button(f"Extract: {ex_on}", f"htmerge extract {mid}")
-                    buttons.data_button("Done", f"htmerge done {mid}", position="footer")
+                    buttons.data_button(f"✂️ Trim: {tr_on}", f"htmerge trim {mid}")
+                    buttons.data_button(f"📂 Extract: {ex_on}", f"htmerge extract {mid}")
+                    buttons.data_button("✅ Done", f"htmerge done {mid}", position="footer")
                     return buttons
 
-                initial_merge = "✓ ON (Normal Mode)" if (self.auto_merge or self.manual_merge or self.folder_name) else "OFF"
-                cli_extract = "✓ ON (-e)" if self.extract else "OFF"
+                initial_merge = "✅ ON (Normal)" if (self.auto_merge or self.manual_merge or self.folder_name) else "OFF"
+                cli_extract = "✅ ON (-e)" if self.extract else "OFF"
                 prompt_msg = await send_message(
                     self.message,
-                    f"<b>Task Received with -ht flag.</b>\n"
-                    f"Choose pre-upload options:\n\n"
+                    f"<b>💎 LMB · Pre-Upload Options (-ht)</b>\n\n"
+                    f"Configure merge, trim and extract before upload.\n"
+                    f"Settings apply to all links sharing the same <code>-m</code> folder.\n\n"
                     f"• <b>Merge:</b> {initial_merge}\n"
                     f"• <b>Trim:</b> OFF\n"
                     f"• <b>Archive Extract (-e):</b> {cli_extract}\n"
-                    f"• <b>Content Extract (menu):</b> OFF",
+                    f"• <b>Content Extract:</b> OFF",
                     build_ht_menu(self.mid).build_menu(2),
                 )
                 try:
@@ -1167,22 +1176,22 @@ async def ht_merge_callback(client, query):
 
     def render_ht_menu(mid):
         t_info = ht_tasks.get(mid, {})
-        m_on = "✓ ON" if t_info.get("merge") else "OFF"
+        m_on = "✅ ON" if t_info.get("merge") else "OFF"
         m_mode = t_info.get("merge_mode", "normal")
-        tr_on = "✓ ON" if t_info.get("trim") else "OFF"
-        ex_on = "✓ ON" if t_info.get("extract") else "OFF"
+        tr_on = "✅ ON" if t_info.get("trim") else "OFF"
+        ex_on = "✅ ON" if t_info.get("extract") else "OFF"
 
         buttons = ButtonMaker()
-        buttons.data_button(f"Merge: {m_on}", f"htmerge merge {mid}", position="header")
+        buttons.data_button(f"🔀 Merge: {m_on}", f"htmerge merge {mid}", position="header")
         if t_info.get("merge"):
-            n_st = "✓ " if m_mode == "normal" else ""
-            a_st = "✓ " if m_mode == "advanced" else ""
-            buttons.data_button(f"{n_st}Normal Mode", f"htmerge setmode {mid} normal")
-            buttons.data_button(f"{a_st}Advanced Mode", f"htmerge setmode {mid} advanced")
+            n_st = "✅ " if m_mode == "normal" else ""
+            a_st = "✅ " if m_mode == "advanced" else ""
+            buttons.data_button(f"{n_st}Normal", f"htmerge setmode {mid} normal")
+            buttons.data_button(f"{a_st}Advanced", f"htmerge setmode {mid} advanced")
 
-        buttons.data_button(f"Trim: {tr_on}", f"htmerge trim {mid}")
-        buttons.data_button(f"Extract: {ex_on}", f"htmerge extract {mid}")
-        buttons.data_button("Done", f"htmerge done {mid}", position="footer")
+        buttons.data_button(f"✂️ Trim: {tr_on}", f"htmerge trim {mid}")
+        buttons.data_button(f"📂 Extract: {ex_on}", f"htmerge extract {mid}")
+        buttons.data_button("✅ Done", f"htmerge done {mid}", position="footer")
         return buttons
 
     def render_ht_text(mid):
@@ -1190,12 +1199,21 @@ async def ht_merge_callback(client, query):
         if not t_info.get("merge"):
             m_disp = "OFF"
         else:
-            m_disp = f"ON ({t_info.get('merge_mode', 'normal').title()} Mode)"
+            m_disp = f"✅ ON ({t_info.get('merge_mode', 'normal').title()})"
+        trim_disp = "OFF"
+        if t_info.get("trim"):
+            rng = t_info.get("trim_range") or "Not set"
+            trim_disp = f"✅ ON · <code>{rng}</code>"
+        ex_disp = "OFF"
+        if t_info.get("extract"):
+            types = ", ".join(t_info.get("extract_types", [])) or "Not set"
+            ex_disp = f"✅ ON · {types}"
         return (
-            f"<b>Task Received with -ht flag.</b>\nChoose pre-upload options:\n\n"
+            f"<b>💎 LMB · Pre-Upload Options (-ht)</b>\n\n"
+            f"Settings apply to every link that shares the same <code>-m</code> folder.\n\n"
             f"• <b>Merge:</b> {m_disp}\n"
-            f"• <b>Trim:</b> {'✓ ON' if t_info.get('trim') else 'OFF'} ({t_info.get('trim_range') or 'Not Set'})\n"
-            f"• <b>Extract:</b> {'✓ ON' if t_info.get('extract') else 'OFF'} ({', '.join(t_info.get('extract_types', [])) or 'Not Set'})"
+            f"• <b>Trim:</b> {trim_disp}\n"
+            f"• <b>Extract:</b> {ex_disp}"
         )
 
     if data[1] == "merge":
@@ -1214,7 +1232,14 @@ async def ht_merge_callback(client, query):
         await query.answer()
         buttons = ButtonMaker()
         buttons.data_button("◀️ Back", f"htmerge back {mid}", position="footer")
-        prompt = "<b>✂️ Trim Media:</b>\nPlease send trim range in format: <code>HH:MM:SS - HH:MM:SS</code>\nExample: <code>00:20:07 - 00:30:08</code>\n⏱️ <i>Timeout: 30s</i>"
+        prompt = (
+            "<b>✂️ Trim Media</b>\n\n"
+            "Send one or more time ranges.\n"
+            "• Single: <code>HH:MM:SS - HH:MM:SS</code>\n"
+            "• Multiple: <code>00:01:00-00:02:30, 00:05:00-00:06:15, 01:10:00-01:12:00</code>\n\n"
+            "Each range becomes its own clip when multiple are given.\n"
+            "⏱️ <i>Timeout: 45s</i>"
+        )
         await edit_message(query.message, prompt, buttons.build_menu(1))
 
         event_done = bot_loop.create_future()
@@ -1235,10 +1260,10 @@ async def ht_merge_callback(client, query):
         from asyncio import wait_for
         h = client.add_handler(MessageHandler(trim_handler, filters=create(trim_filter)), group=-1)
         try:
-            await wait_for(event_done, timeout=30)
-            if user_input and "-" in user_input[0]:
+            await wait_for(event_done, timeout=45)
+            if user_input and ("-" in user_input[0] or " " in user_input[0]):
                 task_info["trim"] = True
-                task_info["trim_range"] = user_input[0]
+                task_info["trim_range"] = user_input[0].strip()
         except Exception:
             pass
         finally:
