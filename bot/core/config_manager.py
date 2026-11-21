@@ -33,7 +33,7 @@ class Config:
     STREAM_TOKENS = ""
     HELPER_BOT_PROXIES = ""
     HELPER_USER_PROXIES = ""
-    BOT_MAX_TASKS = 0
+    BOT_MAX_TASKS = 5
     BOT_PM = False
     CMD_SUFFIX = ""
     DEFAULT_LANG = "en"
@@ -211,7 +211,7 @@ class Config:
     LOGIN_PASS = ""
     TORRENT_TIMEOUT = 0
     TIMEZONE = "Asia/Kolkata"
-    USER_MAX_TASKS = 0
+    USER_MAX_TASKS = 1
     USER_TIME_INTERVAL = 0
     UPLOAD_PATHS = {}
     DRIVE_CATEGORY_MODE = False

@@ -29,7 +29,7 @@ from pyrogram.types import (
 )
 
 from ....core.config_manager import Config
-from ....core.tg_client import TgClient
+from ....core.tg_client import BOT_MAX_BYTES, TgClient
 from ...ext_utils.bot_utils import sync_to_async
 from ...ext_utils.files_utils import get_base_name, is_archive
 from ...ext_utils.status_utils import get_readable_file_size, get_readable_time
@@ -800,24 +800,23 @@ class TelegramUploader:
                                 for subkey, msgs in list(value.items()):
                                     if len(msgs) > 1:
                                         await self._send_media_group(subkey, key, msgs)
-                    if self._listener.transmission_mode == "both":
-                        self._user_session = f_size > 2097152000
-                    elif (
-                        not self._user_session
-                        and f_size > 2097152000
-                        and TgClient.user is not None
-                    ):
-                        self._user_session = True
+                    # Client selection per part size: >2 GB requires user/premium session;
+                    # <=2 GB prefers bot client when possible.
+                    if f_size > BOT_MAX_BYTES:
+                        if TgClient.user is None or not getattr(TgClient, "IS_PREMIUM_USER", False):
+                            raise RuntimeError(
+                                "Part exceeds 2 GiB (BOT_MAX_BYTES); a Telegram Premium USER_SESSION_STRING is required."
+                            )
+                        part_user_session = True
+                    else:
+                        part_user_session = self._listener.transmission_mode == "user"
+                    self._user_session = part_user_session
                     self._last_msg_in_group = False
                     self._upload_seq.append(None)
-                    task = ensure_future(
-                        self._upload_file_task(
-                            file_, f_path, dirpath, self._user_session, seq_idx
-                        )
+                    # Sequential single-part upload (no multi-part parallel upload for Telegram)
+                    await self._upload_file_task(
+                        file_, f_path, dirpath, part_user_session, seq_idx
                     )
-                    upload_tasks.append(task)
-                    if not Config.USE_HYPER:
-                        await task
                     seq_idx += 1
                     if self._listener.is_cancelled:
                         return
@@ -832,7 +831,7 @@ class TelegramUploader:
             for r in results:
                 if isinstance(r, Exception):
                     LOGGER.error(f"Upload task error: {r}")
-            await sleep(1)
+        await sleep(1)
         for key, value in list(self._media_dict.items()):
             for subkey, msgs in list(value.items()):
                 if len(msgs) > 1:

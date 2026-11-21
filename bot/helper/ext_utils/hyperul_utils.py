@@ -11,12 +11,19 @@ try:
 except ImportError:
     FloodPremiumWait = FloodWait
 
+from inspect import signature
 from os import path as ospath
+from time import monotonic
 from aiofiles.os import path as aiopath, remove
+
+try:
+    from pyrogram.raw.types import DocumentAttributeFilename
+except ImportError:
+    DocumentAttributeFilename = None
 
 from ... import LOGGER
 from ...core.config_manager import Config
-from ...core.tg_client import TgClient
+from ...core.tg_client import BOT_MAX_BYTES, TgClient
 from ..telegram_helper.tg_transfer import HypertgTransfer
 from ..ext_utils.media_utils import (
     get_audio_thumbnail,
@@ -34,48 +41,69 @@ class HypertgUpload(HypertgTransfer):
         super().__init__(obj)
         self._up_file = ""
         self._file_progress = {}
+        self._done_flag = {"ok": False}
+        self._meter = {"t": monotonic(), "b": 0, "speed": 0.0}
+        self._last_edit = 0.0
 
-    async def _progress(self, current, total, file_path):
-        if self._listener.is_cancelled:
-            raise StopTransmission()
-        from time import time as _now
+    @staticmethod
+    def _cap_send_name(name: str, max_len: int = 64) -> str:
+        if len(name) <= max_len:
+            return name
+        stem, ext = ospath.splitext(name)
+        if len(ext) >= max_len:
+            return name[:max_len]
+        return f"{stem[: max_len - len(ext)]}{ext}"
+
+    async def _get_upload_client_for_part(self, file_path: str):
+        """Choose the upload identity per part. >2 GB requires the configured user/premium session."""
+        part_size = ospath.getsize(file_path)
+        if part_size > BOT_MAX_BYTES:
+            if TgClient.user is None or not getattr(TgClient, "IS_PREMIUM_USER", False):
+                raise RuntimeError(
+                    "Part exceeds 2 GiB (BOT_MAX_BYTES); a Telegram Premium USER_SESSION_STRING is required."
+                )
+            return TgClient.user, True
+        return TgClient.bot, False
+
+    async def _progress(self, current, total_bytes, file_path):
+        if self._done_flag.get("ok"):
+            return
+        if self._listener.is_cancelled and StopTransmission is not None:
+            raise StopTransmission()  # only reliable way to abort wzgram transfer
+
+        from time import time as _wall_now
 
         # Start the speed clock on the first real byte so status does not
         # average in session warm-up / caption / thumb prep as "slow upload".
         if not getattr(self._obj, "_speed_clock_started", False) and current > 0:
-            now = _now()
-            self._obj._start_time = now
+            self._obj._start_time = _wall_now()
             self._obj._speed_clock_started = True
             self._obj._processed_bytes = 0
-            self._obj._speed_samples = []
             self._obj._instant_speed = 0.0
             self._file_progress.clear()
-        prev_total = sum(self._file_progress.values())
-        self._file_progress[file_path] = current
-        total_done = sum(self._file_progress.values())
-        self._obj._processed_bytes = total_done
+            self._meter = {"t": monotonic(), "b": 0, "speed": 0.0}
 
-        # Sliding-window speed (~last 1.5s): status shows live MTProto rate
-        # from the first parts instead of a slow-rising lifetime average.
-        now = _now()
-        samples = getattr(self._obj, "_speed_samples", None)
-        if samples is None:
-            samples = []
-            self._obj._speed_samples = samples
-        samples.append((now, total_done))
-        cutoff = now - 1.5
-        while len(samples) > 2 and samples[0][0] < cutoff:
-            samples.pop(0)
-        if len(samples) >= 2:
-            dt = samples[-1][0] - samples[0][0]
-            db = samples[-1][1] - samples[0][1]
-            if dt > 0.05 and db >= 0:
-                self._obj._instant_speed = db / dt
-        elif total_done > prev_total:
-            self._obj._instant_speed = max(
-                getattr(self._obj, "_instant_speed", 0.0),
-                (total_done - prev_total) / 0.05,
+        # Speed smoothing (EMA: 0.7 * prev + 0.3 * instant)
+        now = monotonic()
+        delta_t = now - self._meter["t"]
+        delta_b = current - self._meter["b"]
+        if delta_t >= 0.25 and delta_b >= 0:
+            instant = delta_b / delta_t if delta_t > 0 else 0.0
+            self._meter["speed"] = (
+                instant
+                if not self._meter["speed"]
+                else (self._meter["speed"] * 0.7 + instant * 0.3)
             )
+            self._meter["t"], self._meter["b"] = now, current
+            self._obj._instant_speed = self._meter["speed"]
+
+        # Throttle UI/status updates to >= 0.8s intervals
+        if now - self._last_edit < 0.8 and total_bytes and current < total_bytes:
+            return
+        self._last_edit = now
+
+        self._file_progress[file_path] = current
+        self._obj._processed_bytes = sum(self._file_progress.values())
 
     async def upload(
         self,
@@ -199,26 +227,20 @@ class HypertgUpload(HypertgTransfer):
             or (isinstance(upload_chat_id, int) and upload_chat_id > 0)
         )
 
-        if is_private_dm_target:
-            # User DM: bot-only delivery. >2 GiB uses user-session bridge then bot copy.
-            use_hyper = False
-            if up_size > 2097152000 and TgClient.user is not None:
-                user_session = True
-            else:
-                user_session = False
-        elif TgClient.user is not None:
-            # Primary leech/dump chat: always use user session for max MTProto speed.
-            # Bot later copies to user DM + additional dumps (no session on those hops).
-            use_hyper = False
+        # No multi-part parallel upload for Telegram; select upload identity per part size.
+        use_hyper = False
+        _, part_needs_user = await self._get_upload_client_for_part(file_path)
+        if part_needs_user:
             user_session = True
-        elif up_size > 2097152000 and any(k < 0 for k in self.clients):
-            use_hyper = True
-            hyper_user_only = True
-            user_session = False
+        elif self._listener.transmission_mode == "user" and TgClient.user is not None and not is_private_dm_target:
+            user_session = True
         else:
-            # Helper bots / Hyper path for parallel multi-client uploads when no user session.
-            use_hyper = Config.USE_HYPER and bool(self.clients) and up_size > 1 * 1024 * 1024
+            # Prefer bot client when part <= BOT_MAX_BYTES
+            user_session = False
 
+        self._done_flag = {"ok": False}
+        self._meter = {"t": monotonic(), "b": 0, "speed": 0.0}
+        self._last_edit = 0.0
         try:
             if use_hyper:
                 hyper_rply = (
@@ -292,6 +314,7 @@ class HypertgUpload(HypertgTransfer):
             LOGGER.error(f"HypertgUL fail {self._up_file}: {type(e).__name__}: {e}")
             raise
         finally:
+            self._done_flag["ok"] = True
             if user_thumb is None and thumb is not None and await aiopath.exists(thumb):
                 try:
                     await remove(thumb)
@@ -583,7 +606,14 @@ class HypertgUpload(HypertgTransfer):
         elif key == "photos":
             kwargs["photo"] = file_path
         else:
+            send_name = self._cap_send_name(ospath.basename(file_path), 64)
             kwargs["document"] = file_path
+            kwargs["file_name"] = send_name
+            if (
+                DocumentAttributeFilename is not None
+                and "attributes" in signature(client.send_document).parameters
+            ):
+                kwargs["attributes"] = [DocumentAttributeFilename(file_name=send_name)]
 
         # If target is User PM and file > 2 GiB, stage via TgClient.user -> TgClient.bot bridge
         if is_private_dm_target and up_size > 2097152000 and TgClient.user is not None:

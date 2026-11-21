@@ -30,7 +30,7 @@ except OSError:
 # WZGRAM_MAX_INFLIGHT_MEDIA stays at library default (6) per connection —
 # throughput comes from multiple media sessions, not overloading one socket.
 os.environ.setdefault("WZGRAM_MEDIA_TIMEOUT", "120")
-os.environ.setdefault("WZGRAM_MAX_CONCURRENT", "16")
+os.environ.setdefault("WZGRAM_MAX_CONCURRENT", "2")
 # 0 keeps kernel socket autotuning (recommended for high-throughput links).
 os.environ.setdefault("WZGRAM_SOCKET_BUFFER", "0")
 
@@ -238,6 +238,8 @@ class TgClient:
         except ImportError:
             FloodPremiumWait = FloodWait
 
+        if os.environ.get("WZGRAM_FAST_SAVE_FILE", "0") != "1":
+            return client
         orig_save_file = getattr(client, "save_file", None)
         if not callable(orig_save_file) or getattr(client, "_wz_fast_upload_installed", False):
             return client
@@ -258,16 +260,16 @@ class TgClient:
         # throughput (see https://wzgram.com/features/performance/, "Gotchas").
         # The only lever that actually scales aggregate throughput is the
         # number of parallel media sessions, so that's what moves here.
-        MAX_SESSIONS = 20
+        MAX_SESSIONS = 4
         # Hard ceiling for the WZGRAM_FAST_UPLOAD_SESSIONS operator override
         # below. This must stay independent of MAX_SESSIONS — clamping the
         # override to the same constant as the default silently capped any
         # attempt to scale past the default (e.g. WZGRAM_FAST_UPLOAD_SESSIONS=24
         # was previously clamped right back down to 8/16 here).
-        MAX_SESSIONS_CEILING = 40
+        MAX_SESSIONS_CEILING = 8
         # Keep ≤ WZGRAM_MAX_INFLIGHT_MEDIA (default 6) per connection to avoid
         # mass timeouts; scale throughput via more sessions, not more per-session load.
-        WORKERS_PER_SESSION = 6
+        WORKERS_PER_SESSION = 2
 
         async def _close_media_sessions():
             async with client._fast_upload_lock:
@@ -375,7 +377,7 @@ class TgClient:
             try:
                 env_sessions = int(os.environ.get("WZGRAM_FAST_UPLOAD_SESSIONS", "0") or 0)
                 if env_sessions > 0:
-                    pool_size = max(4, min(MAX_SESSIONS_CEILING, env_sessions))
+                    pool_size = max(1, min(MAX_SESSIONS_CEILING, env_sessions))
                 else:
                     # Always start at the full session ceiling — no slow ramp.
                     pool_size = MAX_SESSIONS
@@ -518,9 +520,8 @@ class TgClient:
         client.save_file = _fast_save_file
         client._wz_fast_upload_installed = True
         LOGGER.info(
-            "LMB wzgram fast upload installed "
-            "(target ≥300 Mbps from first parts; sessions=20 (env override up to 40), workers=6/session, "
-            "part=512KiB, parallel session warm-up)"
+            "LMB wzgram upload engine installed "
+            "(bounded transmissions, 512KiB parts, bounded media-session pool; speed depends on network and Telegram limits)"
         )
         return client
 
@@ -535,8 +536,16 @@ class TgClient:
         # Do not point sessions at a container-only absolute path.
         kwargs.setdefault("workdir", str(SESSION_STORAGE_DIR))
         kwargs["in_memory"] = False
+        kwargs.setdefault("no_updates", True)
+        kwargs.setdefault("sleep_threshold", 60)
+        # max_concurrent_transmissions was 16 — each open upload part holds
+        # multi-MB buffers. On a 1GB dyno that alone caused R14 as soon as
+        # /leech was added. 2 is enough for throughput without blowing RAM.
         for param, value in {
-            "max_concurrent_transmissions": int(os.environ.get("WZGRAM_MAX_CONCURRENT", "16")),
+            "max_concurrent_transmissions": max(
+                1, int(os.environ.get("WZGRAM_MAX_CONCURRENT", "2"))
+            ),
+            "sleep_threshold": kwargs.get("sleep_threshold", 60),
             "skip_updates": False,
         }.items():
             if param in signature(Client.__init__).parameters:
@@ -769,6 +778,7 @@ class TgClient:
             f"WZ-Bot{cls.ID}",
             bot_token=Config.BOT_TOKEN,
             workdir=str(SESSION_STORAGE_DIR),
+            no_updates=False,
         )
         while True:
             try:

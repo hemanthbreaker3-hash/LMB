@@ -104,7 +104,8 @@ def verify_pin(gid, pin, bot_id):
 
 COMMAND_USAGE = {}
 
-THREAD_POOL = ThreadPoolExecutor(max_workers=1000)
+THREAD_POOL_SIZE = max(1, int(__import__("os").environ.get("BOT_THREAD_POOL_SIZE", "8")))
+THREAD_POOL = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
 
 
 class SetInterval:

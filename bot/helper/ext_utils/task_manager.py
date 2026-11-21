@@ -99,17 +99,14 @@ async def stop_duplicate_check(listener):
 
 
 def _effective_all_task_limit():
-    """Return the active global task cap; 0 means unlimited.
+    """Return the active global task cap bounded by BOT_HARD_TASK_LIMIT."""
+    import os
 
-    BOT_MAX_TASKS and QUEUE_ALL are both global concurrency controls.  The
-    smaller positive value wins so one setting cannot silently bypass the other.
-    """
-    limits = [
-        value
-        for value in (safe_int(Config.BOT_MAX_TASKS), safe_int(Config.QUEUE_ALL))
-        if value > 0
-    ]
-    return min(limits) if limits else 0
+    hard = max(1, int(os.environ.get("BOT_HARD_TASK_LIMIT", "5")))
+    bot_total = safe_int(Config.BOT_MAX_TASKS)
+    b_lim = min(bot_total if bot_total > 0 else hard, hard)
+    q_all = safe_int(Config.QUEUE_ALL)
+    return min(b_lim, q_all) if q_all > 0 else b_lim
 
 
 async def check_running_tasks(listener, state="dl"):
@@ -120,7 +117,7 @@ async def check_running_tasks(listener, state="dl"):
         else safe_int(Config.QUEUE_UPLOAD)
     )
     user_dict = user_data.get(listener.user_id, {})
-    user_limit = safe_int(user_dict.get("maxtask", Config.USER_MAX_TASKS))
+    user_limit = safe_int(user_dict.get("maxtask") or Config.USER_MAX_TASKS or 1)
 
     event = None
     is_over_limit = False
@@ -185,7 +182,7 @@ async def _can_start_user_task(mid):
             return True
         user_id = task.listener.user_id
         user_dict = user_data.get(user_id, {})
-        user_limit = safe_int(user_dict.get("maxtask", Config.USER_MAX_TASKS))
+        user_limit = safe_int(user_dict.get("maxtask") or Config.USER_MAX_TASKS or 1)
         if user_limit <= 0:
             return True
         user_running = sum(
