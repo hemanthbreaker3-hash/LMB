@@ -70,7 +70,6 @@ async def update_qb_options():
 async def update_aria2_options():
     LOGGER.info("Get aria2 options from server")
     speed_opts = {
-        "max-connection-per-server": "16",
         "split": "16",
         "min-split-size": "1M",
         "piece-length": "1M",
@@ -83,9 +82,11 @@ async def update_aria2_options():
     if not aria2_options:
         op = await TorrentManager.aria2.getGlobalOption()
         aria2_options.update(op)
+        aria2_options.pop("max-connection-per-server", None)
         aria2_options.update(speed_opts)
         await TorrentManager.aria2.changeGlobalOption(aria2_options)
     else:
+        aria2_options.pop("max-connection-per-server", None)
         aria2_options.update(speed_opts)
         await TorrentManager.aria2.changeGlobalOption(aria2_options)
 

@@ -21,9 +21,6 @@ async def add_aria2_download(listener, dpath, header, ratio, seed_time):
         return
     a2c_opt = {
         "dir": dpath,
-        # Aria2 hard-limits max-connection-per-server to 1–16. Use 16 from the
-        # first piece so multi-connection starts immediately (no slow ramp).
-        "max-connection-per-server": "16",
         "split": "16",
         "min-split-size": "1M",
         "piece-length": "1M",

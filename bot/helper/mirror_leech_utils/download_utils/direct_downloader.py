@@ -52,8 +52,6 @@ async def add_direct_download(listener, path):
     a2c_opt = {
         "follow-torrent": "false",
         "follow-metalink": "false",
-        # Aria2 max for max-connection-per-server is 16 — higher values fail RPC.
-        "max-connection-per-server": "16",
         "split": "16",
         "min-split-size": "1M",
         "piece-length": "1M",
