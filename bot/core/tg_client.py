@@ -31,8 +31,14 @@ except OSError:
 # throughput comes from multiple media sessions, not overloading one socket.
 os.environ.setdefault("WZGRAM_MEDIA_TIMEOUT", "120")
 os.environ.setdefault("WZGRAM_MAX_CONCURRENT", "2")
-# 0 keeps kernel socket autotuning (recommended for high-throughput links).
+# 0 keeps kernel socket autotuning (recommended by wzgram.com/features/performance/).
 os.environ.setdefault("WZGRAM_SOCKET_BUFFER", "0")
+# Keep 6 inflight requests per media session & 32 KiB inline WarpCrypto threshold.
+os.environ.setdefault("WZGRAM_MAX_INFLIGHT_MEDIA", "6")
+os.environ.setdefault("WZGRAM_INLINE_CRYPTO_MAX", "32768")
+os.environ.setdefault("WZGRAM_CRYPTO_WORKERS", "4")
+os.environ.setdefault("WZGRAM_MAX_READ_AHEAD", "128")
+os.environ.setdefault("WZGRAM_FAST_SAVE_FILE", "1")
 
 _DB_PARTITION_SALT = b"wzmlx_v3_db_partition_salt"
 
@@ -238,7 +244,7 @@ class TgClient:
         except ImportError:
             FloodPremiumWait = FloodWait
 
-        if os.environ.get("WZGRAM_FAST_SAVE_FILE", "0") != "1":
+        if os.environ.get("WZGRAM_FAST_SAVE_FILE", "1") != "1":
             return client
         orig_save_file = getattr(client, "save_file", None)
         if not callable(orig_save_file) or getattr(client, "_wz_fast_upload_installed", False):
@@ -260,16 +266,10 @@ class TgClient:
         # throughput (see https://wzgram.com/features/performance/, "Gotchas").
         # The only lever that actually scales aggregate throughput is the
         # number of parallel media sessions, so that's what moves here.
-        MAX_SESSIONS = 4
-        # Hard ceiling for the WZGRAM_FAST_UPLOAD_SESSIONS operator override
-        # below. This must stay independent of MAX_SESSIONS — clamping the
-        # override to the same constant as the default silently capped any
-        # attempt to scale past the default (e.g. WZGRAM_FAST_UPLOAD_SESSIONS=24
-        # was previously clamped right back down to 8/16 here).
-        MAX_SESSIONS_CEILING = 8
-        # Keep ≤ WZGRAM_MAX_INFLIGHT_MEDIA (default 6) per connection to avoid
-        # mass timeouts; scale throughput via more sessions, not more per-session load.
-        WORKERS_PER_SESSION = 2
+        MAX_SESSIONS = 8
+        MAX_SESSIONS_CEILING = 16
+        # Keep <= WZGRAM_MAX_INFLIGHT_MEDIA (default 6) per connection per wzgram.com/features/performance/.
+        WORKERS_PER_SESSION = 4
 
         async def _close_media_sessions():
             async with client._fast_upload_lock:
@@ -547,6 +547,9 @@ class TgClient:
             ),
             "sleep_threshold": kwargs.get("sleep_threshold", 60),
             "skip_updates": False,
+            "auto_no_updates": True,
+            "fetch_stories": False,
+            "fetch_stickers": False,
         }.items():
             if param in signature(Client.__init__).parameters:
                 kwargs[param] = value
