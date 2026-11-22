@@ -58,7 +58,7 @@ async def bot_help(_, message):
             lines.append(clean)
 
     text = (
-        "<b>🚀 CANTARELLABOTS Help</b>\n\n"
+        "<b>🚀 LMB Help Center</b>\n\n"
         "<i>⚡ Ultra-fast command reference</i>\n\n"
         + "\n".join(f"• {line}" for line in lines)
         + "\n\n"

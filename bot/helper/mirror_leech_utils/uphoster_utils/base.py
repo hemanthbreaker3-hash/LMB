@@ -1,4 +1,5 @@
 from logging import getLogger
+from time import monotonic
 
 from tenacity import RetryError
 
@@ -27,10 +28,11 @@ class BaseUpload:
         self._processed_bytes = 0
         self.last_uploaded = 0
         self.total_time = 0
+        self._start_ts = 0.0
         self.total_files = 0
         self.total_folders = 0
         self.is_uploading = True
-        self.update_interval = 3
+        self.update_interval = 1
         self.token = self._resolve_token()
 
     def _resolve_token(self):
@@ -43,7 +45,10 @@ class BaseUpload:
     @property
     def speed(self):
         try:
-            return self._processed_bytes / self.total_time
+            if self._start_ts > 0:
+                elapsed = max(0.05, monotonic() - self._start_ts)
+                return self._processed_bytes / elapsed
+            return self._processed_bytes / max(0.05, self.total_time)
         except Exception:
             return 0
 
@@ -52,6 +57,8 @@ class BaseUpload:
         return self._processed_bytes
 
     def _progress_callback(self, current):
+        if self._start_ts <= 0.0 and current > 0:
+            self._start_ts = monotonic()
         chunk = current - self.last_uploaded
         self.last_uploaded = current
         self._processed_bytes += chunk
@@ -88,7 +95,7 @@ class BaseUpload:
                     from asyncio import sleep as asleep
                     self.last_uploaded = 0
                     self._processed_bytes = 0
-                    await asleep(2)
+                    await asleep(0.5)
                     continue
                 await self.listener.on_upload_error(err_msg)
                 self._is_errored = True

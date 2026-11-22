@@ -30,14 +30,14 @@ except OSError:
 # WZGRAM_MAX_INFLIGHT_MEDIA stays at library default (6) per connection —
 # throughput comes from multiple media sessions, not overloading one socket.
 os.environ.setdefault("WZGRAM_MEDIA_TIMEOUT", "120")
-os.environ.setdefault("WZGRAM_MAX_CONCURRENT", "2")
+os.environ.setdefault("WZGRAM_MAX_CONCURRENT", "16")
 # 0 keeps kernel socket autotuning (recommended by wzgram.com/features/performance/).
 os.environ.setdefault("WZGRAM_SOCKET_BUFFER", "0")
 # Keep 6 inflight requests per media session & 32 KiB inline WarpCrypto threshold.
-os.environ.setdefault("WZGRAM_MAX_INFLIGHT_MEDIA", "6")
+os.environ.setdefault("WZGRAM_MAX_INFLIGHT_MEDIA", "8")
 os.environ.setdefault("WZGRAM_INLINE_CRYPTO_MAX", "32768")
-os.environ.setdefault("WZGRAM_CRYPTO_WORKERS", "4")
-os.environ.setdefault("WZGRAM_MAX_READ_AHEAD", "128")
+os.environ.setdefault("WZGRAM_CRYPTO_WORKERS", "8")
+os.environ.setdefault("WZGRAM_MAX_READ_AHEAD", "256")
 os.environ.setdefault("WZGRAM_FAST_SAVE_FILE", "1")
 
 _DB_PARTITION_SALT = b"wzmlx_v3_db_partition_salt"
@@ -269,7 +269,7 @@ class TgClient:
         MAX_SESSIONS = 8
         MAX_SESSIONS_CEILING = 16
         # Keep <= WZGRAM_MAX_INFLIGHT_MEDIA (default 6) per connection per wzgram.com/features/performance/.
-        WORKERS_PER_SESSION = 4
+        WORKERS_PER_SESSION = 6
 
         async def _close_media_sessions():
             async with client._fast_upload_lock:
@@ -415,7 +415,7 @@ class TgClient:
                         break
                     offset = part_idx * PART_SIZE
                     try:
-                        chunk = await to_thread(os.pread, fd, PART_SIZE, offset)
+                        chunk = os.pread(fd, PART_SIZE, offset)
                         if not chunk:
                             break
                         for attempt in range(6):
@@ -543,7 +543,7 @@ class TgClient:
         # /leech was added. 2 is enough for throughput without blowing RAM.
         for param, value in {
             "max_concurrent_transmissions": max(
-                1, int(os.environ.get("WZGRAM_MAX_CONCURRENT", "2"))
+                1, int(os.environ.get("WZGRAM_MAX_CONCURRENT", "16"))
             ),
             "sleep_threshold": kwargs.get("sleep_threshold", 60),
             "skip_updates": False,
@@ -577,13 +577,14 @@ class TgClient:
         await sleep(delay)
         try:
             hbot = cls.wztgClient(
-                f"WZ-HBot{no}",
+                f"LMB-HBot{no}",
                 bot_token=b_token,
                 no_updates=True,
                 proxy=proxy,
             )
             await hbot.start()
             cls._install_fast_upload(hbot)
+            bot_loop.create_task(hbot.warm_fast_upload_sessions())
             LOGGER.info(f"Helper Bot [@{hbot.me.username}] Started!")
             cls.helper_bots[no], cls.helper_loads[no] = hbot, 0
         except FloodWait as e:
@@ -596,13 +597,14 @@ class TgClient:
     async def start_hclient(cls, no, b_token, proxy=None):
         try:
             hbot = cls.wztgClient(
-                f"WZ-HBot{no}",
+                f"LMB-HBot{no}",
                 bot_token=b_token,
                 no_updates=True,
                 proxy=proxy,
             )
             await hbot.start()
             cls._install_fast_upload(hbot)
+            bot_loop.create_task(hbot.warm_fast_upload_sessions())
             LOGGER.info(f"Helper Bot [@{hbot.me.username}] Started!")
             cls.helper_bots[no], cls.helper_loads[no] = hbot, 0
         except FloodWait as e:
@@ -642,7 +644,7 @@ class TgClient:
         await sleep(delay)
         try:
             sbot = cls.wztgClient(
-                f"WZ-SBot{no}",
+                f"LMB-SBot{no}",
                 bot_token=b_token,
                 no_updates=True,
                 proxy=proxy,
@@ -660,7 +662,7 @@ class TgClient:
     async def start_sclient(cls, no, b_token, proxy=None):
         try:
             sbot = cls.wztgClient(
-                f"WZ-SBot{no}",
+                f"LMB-SBot{no}",
                 bot_token=b_token,
                 no_updates=True,
                 proxy=proxy,
@@ -698,7 +700,7 @@ class TgClient:
         await sleep(delay)
         try:
             huser = cls.wztgClient(
-                f"WZ-HUser{no}",
+                f"LMB-HUser{no}",
                 session_string=session_string,
                 sleep_threshold=60,
                 no_updates=True,
@@ -709,6 +711,8 @@ class TgClient:
             huser._is_premium_cached = bool(getattr(me, "is_premium", False))
             uname = me.username or me.first_name
             LOGGER.info(f"Helper User [{uname}] Started! Premium={huser._is_premium_cached}")
+            cls._install_fast_upload(huser)
+            bot_loop.create_task(huser.warm_fast_upload_sessions())
             cls.helper_users[no], cls.helper_user_loads[no] = huser, 0
             if huser._is_premium_cached and not cls.IS_PREMIUM_USER:
                 cls.IS_PREMIUM_USER = True
@@ -724,7 +728,7 @@ class TgClient:
     async def start_huser(cls, no, session_string, proxy=None):
         try:
             huser = cls.wztgClient(
-                f"WZ-HUser{no}",
+                f"LMB-HUser{no}",
                 session_string=session_string,
                 sleep_threshold=60,
                 no_updates=True,
@@ -735,6 +739,8 @@ class TgClient:
             huser._is_premium_cached = bool(getattr(me, "is_premium", False))
             uname = me.username or me.first_name
             LOGGER.info(f"Helper User [{uname}] Started! Premium={huser._is_premium_cached}")
+            cls._install_fast_upload(huser)
+            bot_loop.create_task(huser.warm_fast_upload_sessions())
             cls.helper_users[no], cls.helper_user_loads[no] = huser, 0
             if huser._is_premium_cached and not cls.IS_PREMIUM_USER:
                 cls.IS_PREMIUM_USER = True
@@ -778,7 +784,7 @@ class TgClient:
         cls.ID = Config.BOT_TOKEN.split(":", 1)[0]
         cls.PARTITION = db_partition_id(cls.ID)
         cls.bot = cls.wztgClient(
-            f"WZ-Bot{cls.ID}",
+            f"LMB-Bot{cls.ID}",
             bot_token=Config.BOT_TOKEN,
             workdir=str(SESSION_STORAGE_DIR),
             no_updates=False,
@@ -797,7 +803,7 @@ class TgClient:
             await cls.bot.warm_fast_upload_sessions()
         except Exception:
             pass
-        LOGGER.info(f"WZ Bot : [@{cls.BNAME}] Started!")
+        LOGGER.info(f"LMB Bot : [@{cls.BNAME}] Started!")
 
     @classmethod
     def _sync_split_size_with_premium(cls):
@@ -825,7 +831,7 @@ class TgClient:
         await sleep(delay)
         try:
             cls.user = cls.wztgClient(
-                "WZ-User",
+                "LMB-User",
                 session_string=Config.USER_SESSION_STRING.strip(),
                 sleep_threshold=60,
                 no_updates=True,
@@ -837,7 +843,7 @@ class TgClient:
             cls._sync_split_size_with_premium()
             uname = me.username or me.first_name
             LOGGER.info(
-                "WZ User : [%s] Started! Premium=%s upload_limit=%s bytes",
+                "LMB User : [%s] Started! Premium=%s upload_limit=%s bytes",
                 uname, cls.IS_PREMIUM_USER, cls.MAX_SPLIT_SIZE,
             )
             bot_loop.create_task(cls.warm_peer_cache(cls.user))
@@ -862,7 +868,7 @@ class TgClient:
                             await cls.user._close_fast_upload_sessions()
                         await cls.user.stop()
                 cls.user = cls.wztgClient(
-                    "WZ-User",
+                    "LMB-User",
                     session_string=session_str,
                     sleep_threshold=60,
                     no_updates=True,
@@ -879,7 +885,7 @@ class TgClient:
                 cls._sync_split_size_with_premium()
                 uname = me.username or me.first_name
                 LOGGER.info(
-                    "WZ User : [%s] Started! Premium=%s upload_limit=%s bytes",
+                    "LMB User : [%s] Started! Premium=%s upload_limit=%s bytes",
                     uname, cls.IS_PREMIUM_USER, cls.MAX_SPLIT_SIZE,
                 )
                 bot_loop.create_task(cls.warm_peer_cache(cls.user))
@@ -952,7 +958,7 @@ class TgClient:
                         await existing._close_fast_upload_sessions()
                     await existing.stop()
                 cls.personal_users.pop(user_id, None)
-            name = f"WZ-PUser-{user_id}"
+            name = f"LMB-PUser-{user_id}"
             client = cls.wztgClient(
                 name,
                 session_string=session_clean,
@@ -965,6 +971,8 @@ class TgClient:
                 client.me = me
                 client._is_premium_cached = bool(getattr(me, "is_premium", False))
                 client._session_str_hash = sess_hash
+                cls._install_fast_upload(client)
+                bot_loop.create_task(client.warm_fast_upload_sessions())
                 cls.personal_users[user_id] = client
                 LOGGER.info(
                     "Personal user session [%s] started as @%s (Premium=%s)",
@@ -1034,11 +1042,13 @@ class TgClient:
                         await cli.stop()
                 try:
                     cli = cls.wztgClient(
-                        f"WZ-UserBot-{user_id}-{fingerprint[:12]}",
+                        f"LMB-UserBot-{user_id}-{fingerprint[:12]}",
                         bot_token=token,
                         no_updates=True,
                     )
                     await cli.start()
+                    cls._install_fast_upload(cli)
+                    bot_loop.create_task(cli.warm_fast_upload_sessions())
                     cls.user_bots[key] = cli
                     res[idx] = cli
                 except Exception as e:

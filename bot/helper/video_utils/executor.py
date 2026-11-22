@@ -163,7 +163,7 @@ class VidEcxecutor(FFProgress):
 
     async def _queue(self, update=False):
         if self._metadata:
-            add_to_queue, event = await check_running_tasks(self.listener.mid)
+            add_to_queue, event = await check_running_tasks(self.listener)
             if add_to_queue:
                 LOGGER.info('Added to Queue/Download: %s', self.name)
                 async with task_dict_lock:

@@ -1,4 +1,4 @@
-from asyncio import sleep
+from asyncio import sleep, wait_for
 
 from PIL import Image
 from pyrogram import StopTransmission
@@ -78,9 +78,7 @@ class HypertgUpload(HypertgTransfer):
         if not getattr(self._obj, "_speed_clock_started", False) and current > 0:
             self._obj._start_time = _wall_now()
             self._obj._speed_clock_started = True
-            self._obj._processed_bytes = 0
-            self._obj._instant_speed = 0.0
-            self._file_progress.clear()
+        if not self._file_progress and current > 0:
             self._meter = {"t": monotonic(), "b": 0, "speed": 0.0}
 
         # Speed smoothing (EMA: 0.7 * prev + 0.3 * instant)
@@ -95,15 +93,25 @@ class HypertgUpload(HypertgTransfer):
                 else (self._meter["speed"] * 0.7 + instant * 0.3)
             )
             self._meter["t"], self._meter["b"] = now, current
-            self._obj._instant_speed = self._meter["speed"]
+            speed_map = getattr(self._obj, "_speed_map", None)
+            if isinstance(speed_map, dict):
+                speed_map[file_path] = self._meter["speed"]
+                self._obj._instant_speed = sum(speed_map.values())
+            else:
+                self._obj._instant_speed = self._meter["speed"]
 
-        # Throttle UI/status updates to >= 0.8s intervals
-        if now - self._last_edit < 0.8 and total_bytes and current < total_bytes:
+        # Throttle UI/status updates to >= 0.3s intervals
+        if now - self._last_edit < 0.3 and total_bytes and current < total_bytes:
             return
         self._last_edit = now
 
         self._file_progress[file_path] = current
-        self._obj._processed_bytes = sum(self._file_progress.values())
+        prog_map = getattr(self._obj, "_file_progress_map", None)
+        if isinstance(prog_map, dict):
+            prog_map[file_path] = current
+            self._obj._processed_bytes = sum(prog_map.values())
+        else:
+            self._obj._processed_bytes = sum(self._file_progress.values())
 
     async def upload(
         self,
@@ -148,9 +156,12 @@ class HypertgUpload(HypertgTransfer):
                     from ..ext_utils.media_utils import format_tg_thumbnail
                     from ..ext_utils.bot_utils import sync_to_async
 
-                    thumb = await get_auto_thumbnail(
-                        self._up_file or self._listener.name or file_path,
-                        force_document or self._listener.as_doc,
+                    thumb = await wait_for(
+                        get_auto_thumbnail(
+                            self._up_file or self._listener.name or file_path,
+                            force_document or self._listener.as_doc,
+                        ),
+                        timeout=3.0,
                     )
                     if thumb and await aiopath.isfile(thumb):
                         formatted = await sync_to_async(
@@ -227,9 +238,13 @@ class HypertgUpload(HypertgTransfer):
             or (isinstance(upload_chat_id, int) and upload_chat_id > 0)
         )
 
-        # No multi-part parallel upload for Telegram; select upload identity per part size.
-        use_hyper = False
         _, part_needs_user = await self._get_upload_client_for_part(file_path)
+        use_hyper = bool(
+            getattr(Config, 'USE_HYPER', True)
+            and self.num_clients > 0
+            and not is_private_dm_target
+            and not part_needs_user
+        )
         if part_needs_user:
             user_session = True
         elif self._listener.transmission_mode == "user" and TgClient.user is not None and not is_private_dm_target:

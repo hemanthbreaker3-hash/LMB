@@ -5,7 +5,7 @@ from pathlib import Path
 
 class ProgressFileReader(BufferedReader):
     def __init__(self, filename, read_callback=None):
-        super().__init__(open(filename, "rb"))
+        super().__init__(open(filename, "rb", buffering=4 * 1024 * 1024), buffer_size=4 * 1024 * 1024)
         self.__read_callback = read_callback
         self.length = Path(filename).stat().st_size
 

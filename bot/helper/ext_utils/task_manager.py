@@ -98,15 +98,34 @@ async def stop_duplicate_check(listener):
     return False, None
 
 
+def _is_bot_almost_down():
+    """Return True only when the host is under critical memory pressure."""
+    try:
+        from .mem_guard import monitor, available_bytes, limit_bytes
+
+        monitor.sample()
+        pressure = monitor.pressure()
+        avail = available_bytes()
+        cap = limit_bytes()
+        if pressure >= 0.88:
+            return True
+        if cap > 0 and avail > 0 and avail < 160 * 1024 * 1024:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _effective_all_task_limit():
-    """Return the active global task cap bounded by BOT_HARD_TASK_LIMIT."""
+    """Return the active global task cap; 0 means unlimited unless configured."""
     import os
 
-    hard = max(1, int(os.environ.get("BOT_HARD_TASK_LIMIT", "5")))
+    env_hard = os.environ.get("BOT_HARD_TASK_LIMIT", "").strip()
+    hard = max(1, int(env_hard)) if env_hard.isdigit() and int(env_hard) > 0 else 0
     bot_total = safe_int(Config.BOT_MAX_TASKS)
-    b_lim = min(bot_total if bot_total > 0 else hard, hard)
     q_all = safe_int(Config.QUEUE_ALL)
-    return min(b_lim, q_all) if q_all > 0 else b_lim
+    caps = [c for c in (hard, bot_total, q_all) if c > 0]
+    return min(caps) if caps else 0
 
 
 async def check_running_tasks(listener, state="dl"):
@@ -117,7 +136,7 @@ async def check_running_tasks(listener, state="dl"):
         else safe_int(Config.QUEUE_UPLOAD)
     )
     user_dict = user_data.get(listener.user_id, {})
-    user_limit = safe_int(user_dict.get("maxtask") or Config.USER_MAX_TASKS or 1)
+    user_limit = safe_int(user_dict.get("maxtask") or Config.USER_MAX_TASKS or 0)
 
     event = None
     is_over_limit = False
@@ -141,11 +160,15 @@ async def check_running_tasks(listener, state="dl"):
                     is_over_limit = True
 
             if not is_over_limit:
-                is_over_limit = (
-                    all_limit
-                    and dl_count + up_count >= all_limit
-                    and (not state_limit or t_count >= state_limit)
-                ) or (state_limit and t_count >= state_limit)
+                is_over_limit = bool(
+                    (
+                        all_limit
+                        and dl_count + up_count >= all_limit
+                        and (not state_limit or t_count >= state_limit)
+                    )
+                    or (state_limit and t_count >= state_limit)
+                    or (state == "dl" and (dl_count + up_count) >= 1 and _is_bot_almost_down())
+                )
 
             if is_over_limit:
                 event = Event()
@@ -182,7 +205,7 @@ async def _can_start_user_task(mid):
             return True
         user_id = task.listener.user_id
         user_dict = user_data.get(user_id, {})
-        user_limit = safe_int(user_dict.get("maxtask") or Config.USER_MAX_TASKS or 1)
+        user_limit = safe_int(user_dict.get("maxtask") or Config.USER_MAX_TASKS or 0)
         if user_limit <= 0:
             return True
         user_running = sum(
@@ -211,7 +234,7 @@ async def start_from_queued():
                             up += 1
                             if f_tasks == 0 or (up_limit and up >= up_limit):
                                 break
-                if queued_dl and (not dl_limit or dl < dl_limit) and f_tasks != 0:
+                if queued_dl and (not dl_limit or dl < dl_limit) and f_tasks != 0 and (not _is_bot_almost_down() or (dl + up) == 0):
                     for mid in list(queued_dl.keys()):
                         if await _can_start_user_task(mid):
                             await start_dl_from_queued(mid)
@@ -241,7 +264,7 @@ async def start_from_queued():
     if dl_limit := Config.QUEUE_DOWNLOAD:
         async with queue_dict_lock:
             dl = len(non_queued_dl)
-            if queued_dl and dl < dl_limit:
+            if queued_dl and dl < dl_limit and (not _is_bot_almost_down() or (dl + len(non_queued_up)) == 0):
                 for mid in list(queued_dl.keys()):
                     if await _can_start_user_task(mid):
                         await start_dl_from_queued(mid)

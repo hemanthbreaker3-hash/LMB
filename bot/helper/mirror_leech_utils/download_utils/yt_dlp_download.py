@@ -108,9 +108,9 @@ class YoutubeDLHelper:
             "fragment_retries": 15,
             "retries": 15,
             # Max concurrent fragments from the first segment (no slow ramp).
-            "concurrent_fragment_downloads": 16,
-            "http_chunk_size": 10_485_760,  # 10 MiB chunks when supported
-            "buffersize": 1024 * 1024,
+            "concurrent_fragment_downloads": 24,
+            "http_chunk_size": 16_777_216,  # 10 MiB chunks when supported
+            "buffersize": 2 * 1024 * 1024,
             "retry_sleep_functions": {
                 "http": lambda n: 2,
                 "fragment": lambda n: 2,

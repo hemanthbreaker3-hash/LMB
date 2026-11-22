@@ -1,91 +1,65 @@
 # LMB
 
-**LMB** is a premium Telegram mirror/leech bot for Linux VPS deployments. It supports download, media processing, Telegram uploads, user settings, verification, and advanced video/audio tools.
+**LMB** is a high-performance Telegram mirror and leech bot built for Linux VPS deployments. Powered by the **`wzgram`** MTProto framework (`WarpCrypto` + parallel media sessions), LMB delivers maximum download and instant Telegram upload throughput alongside full media processing, user settings, verification controls, and smart resource-aware task queueing.
 
-> **Deployment note:** A successful deployment depends on valid Telegram credentials, a reachable database, supported system packages, and a correctly configured VPS. Review the configuration and deployment logs rather than assuming that a build is guaranteed to succeed on every host.
+> **Deployment Note:** Reliable operation requires valid Telegram credentials (`BOT_TOKEN`, `TELEGRAM_API`, `TELEGRAM_HASH`), a reachable MongoDB instance (`DATABASE_URL`), supported system packages (`ffmpeg`, `aria2c`, `qbittorrent-nox`, `rclone`, `7z`), and a properly configured Linux VPS.
 
-## Features
+## Key Features
 
-- Telegram mirror and leech workflows with task status and upload handling.
-- Video processing through `-vt`, including video merge, audio split, subtitle sync, compression, conversion, watermarking, trimming, extraction, and binary media splitting.
-- Audio/subtitle track management through `-tm`.
-- Per-user settings and persistent configuration when a database is configured.
-- Verification controls and configurable verification shorteners.
-- Command suffix support through `CMD_SUFFIX`.
+- **High-Speed Transfers (`wzgram` MTProto):** Uses `wzgram[fast]` with `WarpCrypto` Rust cryptography, 512 KiB `SaveBigFilePart` chunks, 8 pre-warmed media sessions (up to 48 concurrent workers), `WZGRAM_MAX_CONCURRENT=16`, and zero artificial upload delays for immediate, full-speed Telegram uploads.
+- **Maximized Download Engines:**
+  - **Telegram (`HypertgDownload`):** 1 MiB `GetFile` chunks from the first request, deep pipelining, and multi-client helper pooling.
+  - **Aria2 / Direct HTTP (`a2c.conf`):** 32 connections per server, 32 splits, 512 KiB minimum split size, 512 MiB disk cache, and `optimize-concurrent-downloads=true`.
+  - **yt-dlp:** 24 concurrent fragment downloads, 16 MiB HTTP chunks, and 2 MiB socket buffers.
+  - **qBittorrent, SABnzbd, JDownloader, Mega, Google Drive, Rclone, and Seedr.**
+- **Smart Resource-Aware Queue (`Queue DL`):** Tasks run immediately without artificial single-user limits (`USER_MAX_TASKS=0`, `BOT_MAX_TASKS=0` by default). Automatic download queueing only engages when the host is under critical memory pressure (RAM usage `>= 88%` or available RAM `< 160 MiB` while tasks are active) or when explicit queue limits are configured.
+- **Video Processing (`-vt`):** Video merge, audio split, subtitle sync, compression, conversion, watermarking, multi-range trimming, extraction, ad/name removal, and binary media splitting.
+- **Audio & Subtitle Track Manager (`-tm`):** Remux, reorder, remove, or edit audio/subtitle track metadata without re-encoding.
+- **Automatic Media Thumbnails:** Extracts clean titles from release filenames and fetches verified backdrop/poster artwork from IMDb, TMDb, AniList, Jikan, and TVmaze with a strict 3-second timeout so artwork lookups never delay uploads.
+- **Per-User Settings & Verification:** Persistent MongoDB configuration, verification shorteners, `CMD_SUFFIX` support, and clean Telegram UI.
 
 ## Audio Split
 
-Audio Split is opt-in. When it is disabled, incoming tasks keep their original audio streams and are processed normally.
+Audio Split is opt-in. When disabled, incoming tasks preserve all original audio streams.
 
-Enable **Audio Split on Incoming Tasks** in User Settings → Video Processing Tools to apply it after downloads complete. All supported download sources converge on the same `TaskListener.on_download_complete` pipeline, including Aria2/direct HTTP, qBittorrent, NZB, JDownloader, Mega, Google Drive, Rclone, yt-dlp, and Telegram downloads. Folder and archive inputs are prepared before splitting. Choose the mode there:
+Enable **Audio Split on Incoming Tasks** under **User Settings → Video Processing Tools** to apply it automatically after downloads finish across all download sources (`TaskListener.on_download_complete`):
 
-- **Auto:** detects every audio stream and creates one output video for each stream. Each output uses the original video stream and exactly one audio stream.
-- **Manual:** selecting Manual reveals the **Set Languages** button. Enter your own comma-separated language codes or names (for example `TEL,TAM,HIN`). No language list is preconfigured. The saved list is retained when switching to Auto and restored when switching back to Manual. Each matching track gets its own output video. All non-matching audio tracks are preserved together in one additional output video. Send `clear` to remove the saved list; if no languages are configured, the original input is kept unchanged.
-- **Auto UI:** selecting Auto hides the language-configuration button and splits every detected audio track. No language configuration is requested or used in Auto mode.
-- If none of the configured languages is found, the original input is kept unchanged.
-- Missing configured languages are skipped without failing the task.
-- Stream copying (`-c copy`) is used; video and audio are not re-encoded, preserving source quality and synchronization.
-
-The same Audio Split processing engine and saved Auto/Manual configuration are used by the `-vt` Video Tools workflow. An explicit `-vt` operation takes precedence over the automatic incoming-task setting; select Audio Split in `-vt` to run it directly. For manual matching, language metadata should be present on the audio streams; untagged streams cannot be reliably matched to a language. Common ISO codes, three-letter codes, and language names are normalized (including regional tags such as `eng-US`). During processing, the task status displays **🔊 Audio splitting...**. If splitting cannot find a usable video/audio stream, the original input is retained rather than producing an empty result.
-
-## Automatic Media Thumbnails
-
-Automatic thumbnails extract the series/movie title from the media filename before searching artwork catalogues. Episode markers (`S01E03`, `S1 E3`, `Episode 3`), empty or populated bracket groups, audio-language lists (for example `Tam + Tel + Hin + Eng + Jap`), resolution, HDR, codecs, release tags, and subtitle labels are excluded from the catalogue search title. Unicode titles are preserved, and IMDb lookup retries a matching locale for common non-Latin scripts.
-
-- **Video/media upload:** prefers an IMDb landscape gallery image/backdrop. It does not substitute a portrait poster as a video backdrop; if no suitable backdrop is available, the uploader can use its local video-frame fallback.
-- **Document upload:** prefers portrait IMDb cover/poster artwork.
-- **Matching safety:** IMDb, TMDb, Jikan, AniList, and TVmaze results are checked against the extracted title to avoid attaching artwork for an unrelated title.
-- **Language-independent title matching:** audio and subtitle language tags are treated as release metadata, not part of the title.
-
-Example filename:
-
-```text
-[] The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life - S01E03 - [Tam + Tel + Hin + Eng + Jap] - 480p HDRip x265 - Multi-Subs.mkv
-```
-
-The extracted search title is `The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life`.
+- **Auto Mode:** Detects every audio stream and produces one output video per stream using stream copy (`-c copy`, zero re-encoding).
+- **Manual Mode:** Reveals the **Set Languages** button. Enter comma-separated language codes or names (for example `TEL,TAM,HIN`). Each matching track gets its own output video, while non-matching tracks are preserved together in an additional output video. Send `clear` to remove the saved list.
+- If none of the configured languages match, or if usable streams cannot be isolated, the original file is kept unchanged.
 
 ## Video Tools (`-vt`)
 
-The Video Tools workflow supports the operations exposed by the interactive menu, including:
+Supported interactive `-vt` workflows include:
 
-- Video + Video
+- Video + Video Merge
 - Audio Split
-- SubSync
-- Compress and Convert
+- SubSync & Audio Sync
+- Compress & Convert
 - Watermark
-- Extract and **multi-range Trim**
+- Extract & **Multi-Range Trim**
 - Remove Ads & Names
-- Audio Sync
 - Media Split → Binary
-- MULTI VT where supported
+- Multi-VT where supported
 
-**Trim** accepts one or many ranges:
+Multi-range trim accepts one or more timestamp ranges:
 
 ```text
 00:01:00 00:02:30
 00:01:00-00:02:30, 00:05:00-00:06:15, 01:10:00-01:12:00
 ```
 
-Each range becomes its own clip when multiple ranges are supplied.
-
-The same multi-range trim format is available inside the `-ht` pre-upload menu. When merge is enabled via `-ht` (or auto-merge / `-m`), every task that shares the same `-m` folder uses the identical merge + trim + extract settings. When merge is disabled, the bot simply downloads, processes (including any trim), and uploads.
-
-Some resource-intensive tools may be restricted to authorized or sudo users. The bot enforces its configured permission checks.
+Each range produces its own clip when multiple ranges are supplied.
 
 ## Audio & Subtitle Track Manager (`-tm`)
-
-Example:
 
 ```text
 /mirror https://example.com/video.mkv -tm
 ```
 
-The track manager supports selecting and removing audio/subtitle streams, reordering tracks, editing language/title metadata, setting default tracks, marking forced subtitles, and applying compatible choices across multiple files. Track changes are remuxed without re-encoding.
+Select or remove audio/subtitle streams, reorder tracks, edit language/title metadata, set default or forced flags, and apply compatible layouts across multiple files without re-encoding.
 
 ## Verification
-
-The verification commands include:
 
 ```text
 /verify
@@ -98,11 +72,11 @@ The verification commands include:
 /verify user USER_ID revoke
 ```
 
-Use `/shorteners` as an authorized administrator to manage verification shorteners. Configure providers using their documented API formats.
+Authorized administrators can manage verification shorteners via `/shorteners`.
 
 ## Configuration
 
-Set the required values in `config.py` or through environment variables. Common deployment variables include:
+Configure required settings in `config.py` or via environment variables:
 
 ```bash
 export BOT_TOKEN='YOUR_TELEGRAM_BOT_TOKEN'
@@ -113,35 +87,38 @@ export DATABASE_URL='YOUR_MONGODB_URI'
 export CMD_SUFFIX='a'
 ```
 
-Do not commit real bot tokens, API hashes, database credentials, or other secrets to GitHub. Keep them in the deployment environment or a private `.env` file excluded from version control.
+Optional start-menu customization variables: `START_REPO_URL`, `START_REPO_BUTTON`, `START_UPDATE_URL`, `START_UPDATE_BUTTON`, `START_DEV_URL`, and `START_DEV_BUTTON`.
 
-**Persistence:** `DATABASE_URL` must point to a reachable MongoDB deployment (Atlas or self-hosted). The bot verifies the connection before importing database-backed settings, keeps local user files untouched if MongoDB is unavailable, and flushes user/RSS data before `/restart`. Data remains in MongoDB until explicitly deleted/reset. An empty or unreachable `DATABASE_URL` disables database persistence; check startup logs and MongoDB Atlas Network Access / database-user permissions rather than assuming data was saved.
+Optional speed tuning variables:
+- `USER_SESSION_STRING` — Telegram Premium user session for >2 GiB uploads and high-speed primary hops.
+- `HELPER_TOKENS` / `HELPER_STRINGS` — Extra bot/user clients for parallel `HypertgDownload` and `HypertgUpload`.
+- `WZGRAM_MAX_CONCURRENT` — Concurrent transmissions per client (default `16`).
+- `WZGRAM_FAST_UPLOAD_SESSIONS` — Parallel media sessions per upload (default `8`, ceiling `16`).
 
-Optional start-menu links/buttons may be configured with `START_REPO_URL`, `START_REPO_BUTTON`, `START_UPDATE_URL`, `START_UPDATE_BUTTON`, `START_DEV_URL`, and `START_DEV_BUTTON`.
+Never commit real bot tokens, API hashes, session strings, or database URIs to version control.
 
-## Deploy on Ubuntu/Debian VPS
+## Deploy on Ubuntu / Debian VPS
 
-### 1. Get the source
+### 1. Prepare the source
+
+Extract the project archive (or clone your repository) and enter the project directory:
 
 ```bash
-git clone https://github.com/hemanthbreaker3-hash/CDML-X.git
-cd CDML-X
+cd LMB-main
 ```
-
-If deploying from an archive, extract it and run the following commands from the project directory.
 
 ### 2. Configure credentials
 
-Set the environment variables above, or configure the equivalent values in `config.py`. Confirm that the database URI is reachable from the VPS.
+Set the environment variables above or update `config.py`. Ensure your MongoDB URI is reachable from the VPS.
 
-### 3. Install and start
+### 3. Install & start
 
 ```bash
 chmod +x one-click-deploy.sh deploy.vps deploy-user.vps start.sh
 ./one-click-deploy.sh
 ```
 
-Run as root for system package installation and systemd integration. User-local deployment may not be able to install system packages or create system services.
+Run as root for system package installation and `systemd` setup.
 
 ## Operations
 
@@ -162,19 +139,16 @@ kill "$(cat .cdmlx-user.pid)"
 
 ## Troubleshooting
 
-- **Bot does not start:** check `config.py`, required environment variables, and the first Python traceback in the service log.
-- **Syntax error:** run `python3 -m compileall -q bot` from the project directory.
-- **Database connection failure:** verify the database URI, network access, credentials, and database availability.
-- **FFmpeg operation fails:** confirm `ffmpeg` and `ffprobe` are installed and available in `PATH`.
-- **Audio Split does not match a language:** inspect the source with `ffprobe` and verify that each desired audio stream has a language tag. Common codes include `tel`, `tam`, `hin`, `eng`, `kan`, and `mal`.
-- **Service repeatedly restarts:** inspect `journalctl -u cantarellabots_bot -n 200 --no-pager` and fix the earliest underlying error before restarting.
+- **Bot does not start:** Verify `config.py`, environment variables, and the first Python traceback in the service logs.
+- **Syntax / import check:** Run `python3 -m compileall -q bot` from the repository root.
+- **Database connection error:** Check `DATABASE_URL`, MongoDB Atlas Network Access rules, and database user credentials.
+- **FFmpeg error:** Confirm `ffmpeg` and `ffprobe` are installed and available in `PATH`.
+- **Audio Split misses a language:** Inspect stream tags with `ffprobe` and ensure audio streams carry standard language metadata (e.g., `tel`, `tam`, `hin`, `eng`, `kan`, `mal`).
 
-## Developer checks
-
-Run from the repository root:
+## Developer Checks
 
 ```bash
 python3 -m compileall -q bot
 ```
 
-Review the deployment script output and service logs after every update. Test each download source available in the deployment (Aria2/direct HTTP, qBittorrent, NZB, JDownloader, Mega, Google Drive, Rclone, yt-dlp, and Telegram), normal mirror/leech tasks, `-vt`, Audio Split Auto/Manual, archive/folder inputs, and `-tm` with representative media before production use.
+Verify download sources (Aria2, qBittorrent, NZB, JDownloader, Mega, Google Drive, Rclone, yt-dlp, Telegram), mirror/leech workflows, `-vt`, Audio Split, and `-tm` after updates.

@@ -225,32 +225,32 @@ async def start(_, message):
                 message,
                 "✅ <b>You’re verified!</b>\n\n"
                 f"Your access is verified for <code>{escape(validity_text)}</code>.\n"
-                "Enjoy now! 🎉",
+                "You are all set to start! 🎉",
             )
 
     help_cmd = BotCommands.HelpCommand[0] if isinstance(BotCommands.HelpCommand, list) else BotCommands.HelpCommand
     if await CustomFilters.authorized(_, message):
         start_string = (
-            f"<b>✨ 👋 WELCOME, {escape(user_name)}!</b>\n"
-            f"<blockquote>💎 <b>CANTARELLABOTS PREMIUM EXPERIENCE</b>\n"
-            f"⚡ Mirror and leech files, torrents, and cloud links with a clean, fast workflow.\n"
+            f"<b>✨ Welcome, {escape(user_name)}!</b>\n"
+            f"<blockquote>⚡ <b>LMB — High-Speed Mirror & Leech Bot</b>\n"
+            f"Mirror and leech direct links, torrents, NZB, and cloud files at maximum speed.\n"
             f"🎬 Media • 📁 Documents • ☁️ Cloud Storage</blockquote>\n"
-            f"<b>🚀 QUICK START</b>\n"
-            f"🧭 Help & commands: /{help_cmd}\n"
-            f"💬 Choose an authorized chat button below to get started.\n\n"
-            f"<i>🌟 Built for a smoother file-transfer experience.</i>"
+            f"<b>🚀 Quick Start</b>\n"
+            f"• Commands & guide: /{help_cmd}\n"
+            f"• Select an authorized chat below to begin.\n\n"
+            f"<i>Powered by LMB & wzgram MTProto.</i>"
         )
         await send_message(message, start_string, reply_markup, photo="IMAGES")
     elif Config.BOT_PM:
         start_string = (
-            f"<b>✨ 👋 WELCOME, {escape(user_name)}!</b>\n"
-            f"<blockquote>💎 <b>CANTARELLABOTS</b>\n"
-            f"📥 Your completed files and links will arrive here in this private chat.\n"
-            f"⚡ Ready for your next transfer?</blockquote>\n"
-            f"<b>🚀 GET STARTED</b>\n"
-            f"🧭 Send /{help_cmd} to explore commands.\n"
-            f"💬 Join an authorized chat below to start a task.\n\n"
-            f"<i>🌟 Fast, simple, organized.</i>"
+            f"<b>✨ Welcome, {escape(user_name)}!</b>\n"
+            f"<blockquote>⚡ <b>LMB — High-Speed Mirror & Leech Bot</b>\n"
+            f"📥 Completed files and download links will be delivered directly to this chat.\n"
+            f"🚀 Ready for your next transfer?</blockquote>\n"
+            f"<b>🧭 Get Started</b>\n"
+            f"• Send /{help_cmd} to view available commands.\n"
+            f"• Join an authorized chat below to start a task.\n\n"
+            f"<i>Fast, clean, and reliable.</i>"
         )
         await send_message(
             message,
@@ -260,13 +260,13 @@ async def start(_, message):
         )
     else:
         start_string = (
-            f"<b>✨ 👋 WELCOME TO CANTARELLABOTS, {escape(user_name)}!</b>\n"
-            f"<blockquote>💎 Mirror and leech files, torrents, and links to Telegram or cloud storage.\n"
-            f"🔒 <b>Private access is currently restricted</b> for this bot instance.</blockquote>\n"
-            f"<b>🌐 HOW TO CONTINUE</b>\n"
-            f"💬 Join one of the authorized chats below, then start your task there.\n"
-            f"🧭 Use /{help_cmd} for command guidance.\n\n"
-            f"<i>✨ Thanks for stopping by!</i>"
+            f"<b>✨ Welcome to LMB, {escape(user_name)}!</b>\n"
+            f"<blockquote>⚡ Mirror and leech files, torrents, and links to Telegram or cloud storage.\n"
+            f"🔒 <b>Private chat access is currently restricted</b> on this instance.</blockquote>\n"
+            f"<b>🌐 How to Continue</b>\n"
+            f"• Join an authorized chat below and start your task there.\n"
+            f"• Send /{help_cmd} for command details.\n\n"
+            f"<i>Powered by LMB.</i>"
         )
         await send_message(
             message,

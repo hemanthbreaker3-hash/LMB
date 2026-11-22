@@ -53,7 +53,8 @@ class MultiUphosterUpload:
         self.results = {}
         self.failed = []
 
-        for service in services:
+        for raw_service in services:
+            service = str(raw_service).strip().lower()
             uploader_cls = SERVICE_MAP.get(service)
             if uploader_cls:
                 proxy = ProxyListener(self, service)
@@ -148,6 +149,14 @@ class ProxyListener:
     @property
     def message(self):
         return self.multi_uploader.listener.message
+
+    @property
+    def user_dict(self):
+        return getattr(self.multi_uploader.listener, "user_dict", {})
+
+    @property
+    def tag(self):
+        return getattr(self.multi_uploader.listener, "tag", "")
 
     async def on_upload_complete(self, link, files, folders, mime_type, dir_id=""):
         await self.multi_uploader.on_upload_complete(

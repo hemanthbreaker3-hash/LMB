@@ -1,4 +1,4 @@
-from asyncio import ensure_future, gather, sleep
+from asyncio import Semaphore, ensure_future, gather, sleep, wait_for
 from logging import getLogger
 from os import path as ospath, walk
 from re import match as re_match, sub as re_sub, I as re_I
@@ -67,6 +67,8 @@ class TelegramUploader:
         self._sent_msg = None
         self._user_session = self._listener.transmission_mode in ("user", "both")
         self._hu: HypertgUpload | None = None
+        self._file_progress_map = {}
+        self._speed_map = {}
         self._error = ""
         self._upload_seq = []
         self._msg_to_seq = {}
@@ -699,12 +701,12 @@ class TelegramUploader:
             # original upload after DM delivery or additional-dump fan-out.
             # This intentionally applies to bot- and user-session uploads.
 
-    async def _upload_file_task(self, file_, f_path, dirpath, user_session, seq_idx):
+    async def _upload_file_task(self, file_, f_path, dirpath, user_session, seq_idx, reply_anchor=None):
         up_path = None
         try:
             up_path, cap_mono = await self._prepare_file(file_, dirpath)
             sent = await self._upload_file(
-                cap_mono, up_path, file_, seq_idx, user_session=user_session
+                cap_mono, up_path, file_, seq_idx, user_session=user_session, reply_anchor=reply_anchor
             )
             if sent and not self._is_corrupted:
                 if self._listener.is_super_chat or self._listener.up_dest:
@@ -747,25 +749,41 @@ class TelegramUploader:
                     if family:
                         self._media_info_cache[family] = info
             elif await aiopath.isdir(self._path):
+                async def _cache_one(fp, f):
+                    info = await wait_for(get_media_info(fp, True), timeout=2.5)
+                    if info and (info[2] or info[3] if len(info) > 3 else False):
+                        self._media_info_cache[ospath.abspath(fp)] = info
+                        self._media_info_cache[f] = info
+                        family = re_sub(
+                            r"(?:\.part\d+(?:\.\w+)?|\.\d{3}|\.r\d+)$",
+                            "",
+                            f,
+                        )
+                        if family:
+                            self._media_info_cache[family] = info
+                cache_coros = []
                 for dirpath, _, files in await sync_to_async(walk, self._path):
                     for f in files:
                         if re_match(r".+\.(mkv|mp4|webm|avi|mov|m4v|ts)$", f, re_I):
-                            fp = ospath.join(dirpath, f)
-                            info = await get_media_info(fp, True)
-                            if info and (info[2] or info[3] if len(info) > 3 else False):
-                                self._media_info_cache[ospath.abspath(fp)] = info
-                                self._media_info_cache[f] = info
-                                family = re_sub(
-                                    r"(?:\.part\d+(?:\.\w+)?|\.\d{3}|\.r\d+)$",
-                                    "",
-                                    f,
-                                )
-                                if family:
-                                    self._media_info_cache[family] = info
+                            cache_coros.append(_cache_one(ospath.join(dirpath, f), f))
+                if cache_coros:
+                    await gather(*cache_coros[:8], return_exceptions=True)
         except Exception as e:
             LOGGER.debug(f"Media-info pre-cache skipped: {e}")
         upload_tasks = []
         seq_idx = 0
+        max_parallel = max(
+            2,
+            min(
+                4,
+                len(TgClient.helper_bots)
+                + len(TgClient.helper_users)
+                + (1 if TgClient.user else 0)
+                + 1,
+            ),
+        )
+        up_sem = Semaphore(max_parallel)
+        anchor_msg = self._sent_msg
         for dirpath, _, files in natsorted(await sync_to_async(walk, self._path)):
             if dirpath.strip().endswith("/yt-dlp-thumb"):
                 continue
@@ -813,10 +831,21 @@ class TelegramUploader:
                     self._user_session = part_user_session
                     self._last_msg_in_group = False
                     self._upload_seq.append(None)
-                    # Sequential single-part upload (no multi-part parallel upload for Telegram)
-                    await self._upload_file_task(
-                        file_, f_path, dirpath, part_user_session, seq_idx
-                    )
+                    async def _run_bounded(
+                        _file=file_,
+                        _fpath=f_path,
+                        _dir=dirpath,
+                        _usess=part_user_session,
+                        _idx=seq_idx,
+                    ):
+                        async with up_sem:
+                            if self._listener.is_cancelled:
+                                return None
+                            return await self._upload_file_task(
+                                _file, _fpath, _dir, _usess, _idx, reply_anchor=anchor_msg
+                            )
+
+                    upload_tasks.append(_run_bounded())
                     seq_idx += 1
                     if self._listener.is_cancelled:
                         return
@@ -831,7 +860,6 @@ class TelegramUploader:
             for r in results:
                 if isinstance(r, Exception):
                     LOGGER.error(f"Upload task error: {r}")
-        await sleep(1)
         for key, value in list(self._media_dict.items()):
             for subkey, msgs in list(value.items()):
                 if len(msgs) > 1:
@@ -868,7 +896,7 @@ class TelegramUploader:
         return
 
     async def _upload_file(
-        self, cap_mono, o_path, file_, seq_idx, force_document=False, user_session=False
+        self, cap_mono, o_path, file_, seq_idx, force_document=False, user_session=False, reply_anchor=None
     ):
         if self._sent_msg is None:
             LOGGER.error("Cannot upload: _sent_msg is None")
@@ -892,14 +920,15 @@ class TelegramUploader:
             self._thumb = None
         self._is_corrupted = False
         try:
-            if self._hu is None:
-                self._hu = HypertgUpload(self)
+            hu = HypertgUpload(self)
+            self._hu = hu
+            target_msg = reply_anchor or self._sent_msg
 
-            sent_msg = await self._hu.upload(
+            sent_msg = await hu.upload(
                 file_path=o_path,
                 cap_mono=cap_mono,
-                reply_target=self._sent_msg,
-                reply_msg_id=self._sent_msg.id,
+                reply_target=target_msg,
+                reply_msg_id=target_msg.id,
                 force_document=force_document,
                 user_session=user_session,
                 user_thumb=self._thumb,

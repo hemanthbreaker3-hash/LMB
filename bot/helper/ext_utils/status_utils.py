@@ -386,7 +386,7 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
         else:
             msg = f"<b>💤 No Active <i>{escape(str(status))}</i> Tasks!</b>\n"
 
-    msg += f"\n<b>━━━━━━━━━━━━━━━━━━</b>\n<b>📊 Bot Status Summary</b> · 📦 <b>Active Tasks:</b> <i>{tasks_no}</i>"
+    msg += f"\n<b>━━━━━━━━━━━━━━━━━━</b>\n<b>📊 LMB Status</b> · 📦 <b>Active:</b> <i>{tasks_no}</i>"
     buttons = ButtonMaker()
     if not is_user:
         buttons.data_button(
@@ -396,7 +396,7 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
             style=ButtonStyle.PRIMARY,
         )
     if len(tasks) > STATUS_LIMIT:
-        msg += f"<b>Page:</b> {page_no}/{pages} | <b>Tasks:</b> {tasks_no} | <b>Step:</b> {page_step}\n"
+        msg += f"\n<b>Page:</b> {page_no}/{pages} | <b>Tasks:</b> {tasks_no} | <b>Step:</b> {page_step}"
         buttons.data_button("<<", f"status {sid} pre", position="header")
         buttons.data_button(">>", f"status {sid} nex", position="header")
         if tasks_no > 30:
