@@ -43,6 +43,7 @@ class HypertgUpload(HypertgTransfer):
         self._file_progress = {}
         self._done_flag = {"ok": False}
         self._meter = {"t": monotonic(), "b": 0, "speed": 0.0}
+        self._upload_begin_ts = 0.0
         self._last_edit = 0.0
 
     @staticmethod
@@ -80,6 +81,7 @@ class HypertgUpload(HypertgTransfer):
             self._obj._speed_clock_started = True
         if not self._file_progress and current > 0:
             self._meter = {"t": monotonic(), "b": 0, "speed": 0.0}
+        self._upload_begin_ts = 0.0
 
         # Immediate speed tracking from the first tick — no slow-start ramp
         now = monotonic()
@@ -266,6 +268,7 @@ class HypertgUpload(HypertgTransfer):
 
         self._done_flag = {"ok": False}
         self._meter = {"t": monotonic(), "b": 0, "speed": 0.0}
+        self._upload_begin_ts = 0.0
         self._last_edit = 0.0
         try:
             if use_hyper:

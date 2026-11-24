@@ -1110,6 +1110,36 @@ class TaskConfig:
                 msgts += f"\n• <b>Cancel Multi:</b> <i>/{BotCommands.CancelTaskCommand[1]}_{self.multi_tag}</i>"
             nextmsg = await send_message(self.message, msgts)
         else:
+            # WZML-X style: if replying to consecutive Telegram messages, automatically
+            # advance to reply_id + 1 without waiting 3 minutes for manual input.
+            reply_id = self.message.reply_to_message_id
+            if reply_id is not None and not getattr(self.message, "_is_interactive_multi", False):
+                try:
+                    cand = await self.client.get_messages(
+                        chat_id=self.message.chat.id,
+                        message_ids=reply_id + 1,
+                    )
+                    if (
+                        isinstance(cand, Message)
+                        and not getattr(cand, "empty", False)
+                        and (
+                            cand.document
+                            or cand.video
+                            or cand.audio
+                            or cand.photo
+                            or (cand.text or cand.caption or "").strip()
+                        )
+                    ):
+                        cmd0 = input_list[0] if input_list else "/leech"
+                        opt = self.options if isinstance(self.options, str) else " ".join(self.options or [])
+                        msgts = f"{cmd0} -i {remaining} {opt}".strip()
+                        if remaining > 1:
+                            msgts += f"\n• <b>Cancel Multi:</b> <i>/{BotCommands.CancelTaskCommand[1]}_{self.multi_tag}</i>"
+                        nextmsg = await send_message(cand, msgts)
+                except Exception:
+                    nextmsg = None
+
+        if nextmsg is None and len(self.bulk) == 0:
             # Wait for the user's next message (link or archive/media file)
             wait_note = await send_message(
                 self.message,
@@ -1232,6 +1262,8 @@ class TaskConfig:
         else:
             nextmsg.sender_chat = self.user
         setattr(nextmsg, "_is_bulk_subtask", True)
+        if self.message.reply_to_message_id is None or getattr(self.message, "_is_interactive_multi", False):
+            setattr(nextmsg, "_is_interactive_multi", True)
         if intervals["stopAll"]:
             return
 

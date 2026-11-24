@@ -284,10 +284,6 @@ class Mirror(TaskListener):
         self.as_doc = args["-doc"]
         self.as_med = args["-med"]
         self.folder_name = f"/{args['-m']}".rstrip("/") if len(args["-m"]) > 0 else ""
-        if args["-m"] or "-m" in self.options:
-            self.manual_merge = True
-            m_val = args["-m"]
-            self.merge_custom_name = m_val if isinstance(m_val, str) else ""
         self.bot_trans = args["-bt"]
         self.user_trans = args["-ut"]
         self.is_alldebrid = args["-ad"]
@@ -776,7 +772,7 @@ class Mirror(TaskListener):
                 await delete_links(self.message)
             return
 
-        if self.is_leech and not getattr(self, "thumb_url_override", False) and (not self.thumb or not await aiopath.exists(self.thumb)):
+        if self.is_leech and self.thumb != "none" and not getattr(self, "thumb_url_override", False) and (not self.thumb or not await aiopath.exists(self.thumb)):
             from ..helper.ext_utils.media_utils import create_thumb
             if self.message.photo or (self.message.document and self.message.document.mime_type and self.message.document.mime_type.startswith("image/")):
                 self.thumb = await create_thumb(self.message, self.user_id)
