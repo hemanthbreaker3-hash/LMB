@@ -445,6 +445,8 @@ class Config:
             cls.LEECH_LOG_CHAT = cls._convert_env_type(
                 "LEECH_LOG_CHAT", config_dict["LEECH_DUMP_CHAT"]
             )
+        # Shell-exported environment variables always take main priority over DB/config.py
+        cls.load_env()
         for key in ["BOT_TOKEN", "OWNER_ID", "TELEGRAM_API", "TELEGRAM_HASH"]:
             value = getattr(cls, key)
             if isinstance(value, str):

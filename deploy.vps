@@ -30,13 +30,16 @@ for key in (
     "START_REPO_URL", "START_REPO_BUTTON",
     "START_UPDATE_URL", "START_UPDATE_BUTTON",
     "START_DEV_URL", "START_DEV_BUTTON",
+    "LEECH_DUMP_CHAT", "cmd_suffix",
+    "CBGRAM_RUST_CORE", "CBGRAM_UVLOOP", "CBGRAM_MAX_CONCURRENT", "CBGRAM_WORKERS", "CBGRAM_SESSION_DIR",
+    "BOT_THREAD_POOL_SIZE", "BOT_HARD_TASK_LIMIT",
 ):
     print(key)
 PY_KEYS
   )
   for key in "${DEPLOY_ENV_KEYS[@]}"; do
     if [[ -v "$key" ]]; then
-      printf '%s=%q\\n' "$key" "${!key}" >> "$ENV_HANDOFF"
+      printf '%s=%q\n' "$key" "${!key}" >> "$ENV_HANDOFF"
     fi
   done
   if ! sudo -v; then
@@ -66,7 +69,7 @@ cd "$APP_DIR"
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
 # Persistent Pyrogram session database directory (bot + user session strings).
-export CBGRAM_SESSION_DIR="${CBGRAM_SESSION_DIR:-${CBGRAM_SESSION_DIR:-$APP_DIR/.sessions}}"
+export CBGRAM_SESSION_DIR="${CBGRAM_SESSION_DIR:-$APP_DIR/.sessions}"
 mkdir -p "$CBGRAM_SESSION_DIR" || fail "Cannot create Telegram session directory: $CBGRAM_SESSION_DIR"
 chmod 700 "$CBGRAM_SESSION_DIR" || fail "Cannot secure Telegram session directory: $CBGRAM_SESSION_DIR"
 if [[ ! -w "$CBGRAM_SESSION_DIR" ]]; then
@@ -88,6 +91,9 @@ for key in (
     "START_REPO_URL", "START_REPO_BUTTON",
     "START_UPDATE_URL", "START_UPDATE_BUTTON",
     "START_DEV_URL", "START_DEV_BUTTON",
+    "LEECH_DUMP_CHAT", "cmd_suffix",
+    "CBGRAM_RUST_CORE", "CBGRAM_UVLOOP", "CBGRAM_MAX_CONCURRENT", "CBGRAM_WORKERS", "CBGRAM_SESSION_DIR",
+    "BOT_THREAD_POOL_SIZE", "BOT_HARD_TASK_LIMIT",
 ):
     print(key)
 PY_KEYS
@@ -439,6 +445,12 @@ Environment="PYTHONUNBUFFERED=1"
 WantedBy=multi-user.target
 EOF
 systemd-analyze verify "/etc/systemd/system/${SERVICE_NAME}.service"
+
+# Stop legacy cantarellabots_bot service if present so it does not conflict on BOT_TOKEN
+if systemctl list-unit-files 2>/dev/null | grep -q "^cantarellabots_bot\.service"; then
+  systemctl stop cantarellabots_bot.service 2>/dev/null || true
+  systemctl disable cantarellabots_bot.service 2>/dev/null || true
+fi
 
 echo "[5/6] Enabling systemd service..."
 systemctl daemon-reload

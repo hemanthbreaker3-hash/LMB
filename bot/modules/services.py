@@ -357,13 +357,27 @@ async def ping(_, message):
     )
 
 
+def _flush_logs():
+    from logging import getLogger
+    for h in getLogger().handlers:
+        try:
+            h.flush()
+        except Exception:
+            pass
+
+
 @new_task
 async def log(_, message):
+    _flush_logs()
     uid = message.from_user.id
     buttons = ButtonMaker()
     buttons.data_button("Log Disp", f"log {uid} disp")
     buttons.data_button("Web Log", f"log {uid} web")
     buttons.data_button("Close", f"log {uid} close", style=ButtonStyle.DANGER)
+    from os import path as _ospath
+    if not _ospath.exists("log.txt") or _ospath.getsize("log.txt") == 0:
+        await send_message(message, "📜 <b>Log file is currently empty.</b>", buttons.build_menu(2))
+        return
     await send_file(message, "log.txt", buttons=buttons.build_menu(2))
 
 
@@ -379,8 +393,17 @@ async def log_cb(_, query):
         await delete_message(message, message.reply_to_message)
     elif data[2] == "disp":
         await query.answer("Fetching log file...")
-        async with aiopen("log.txt", "r") as f:
-            content = await f.read()
+        _flush_logs()
+        try:
+            async with aiopen("log.txt", "r", encoding="utf-8", errors="replace") as f:
+                content = await f.read()
+        except FileNotFoundError:
+            await send_message(message, "📜 <b>Log file not found.</b>")
+            return
+
+        if not content.strip():
+            await send_message(message, "📜 <b>Log file is currently empty.</b>")
+            return
 
         def parse(line):
             parts = line.split("] [", 1)
@@ -389,12 +412,14 @@ async def log_cb(_, query):
         try:
             res, total = [], 0
             for line in reversed(content.splitlines()):
-                line = parse(line)
-                res.append(line)
-                total += len(line) + 1
-                if total > 3500:
+                esc_line = escape(parse(line))
+                if total + len(esc_line) + 1 > 3200:
+                    if not res:
+                        res.append(esc_line[-3200:])
                     break
-            log_content = escape("\n".join(reversed(res)))
+                res.append(esc_line)
+                total += len(esc_line) + 1
+            log_content = "\n".join(reversed(res))
             text = f"<b>📜 Recent Log Entries ({len(res)} lines)</b>\n\n<blockquote expandable>{log_content}</blockquote>"
 
             btn = ButtonMaker()
@@ -404,38 +429,45 @@ async def log_cb(_, query):
         except Exception as err:
             LOGGER.error(f"TG Log Display Error: {str(err)}")
     elif data[2] == "web":
-        boundary = "R1eFDeaC554BUkLF"
-        headers = {
-            "Content-Type": f"multipart/form-data; boundary=----WebKitFormBoundary{boundary}",
-            "Origin": "https://spaceb.in",
-            "Referer": "https://spaceb.in/",
-            "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="124"',
-            "sec-ch-ua-mobile": "?1",
-            "sec-ch-ua-platform": '"Android"',
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-User": "?1",
-            "Upgrade-Insecure-Requests": "1",
-            "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-        }
+        _flush_logs()
+        try:
+            async with aiopen("log.txt", "r", encoding="utf-8", errors="replace") as f:
+                content = await f.read()
+        except FileNotFoundError:
+            await query.answer("Log file not found!", show_alert=True)
+            return
+        if not content.strip():
+            await query.answer("Log file is empty!", show_alert=True)
+            return
 
-        async with aiopen("log.txt", "r") as f:
-            content = await f.read()
+        paste_url = None
+        try:
+            async with __import__("aiohttp").ClientSession() as session:
+                async with session.post(
+                    "https://paste.rs/", data=content.encode("utf-8"), timeout=15
+                ) as resp:
+                    if resp.status in (200, 201):
+                        paste_url = (await resp.text()).strip()
+        except Exception:
+            paste_url = None
 
-        data = (
-            f"------WebKitFormBoundary{boundary}\r\n"
-            f'Content-Disposition: form-data; name="content"\r\n\r\n'
-            f"{content}\r\n"
-            f"------WebKitFormBoundary{boundary}--\r\n"
-        )
+        if not paste_url:
+            try:
+                async with __import__("aiohttp").ClientSession() as session:
+                    async with session.post(
+                        "https://dpaste.com/api/v2/",
+                        data={"content": content[-200000:], "syntax": "text", "expiry_days": 7},
+                        timeout=15,
+                    ) as resp:
+                        if resp.status in (200, 201):
+                            paste_url = (await resp.text()).strip()
+            except Exception:
+                paste_url = None
 
-        cget = create_scraper().request
-        resp = cget("POST", "https://spaceb.in/", headers=headers, data=data)
-        if resp.status_code == 200:
-            await query.answer("Generating web paste...")
+        if paste_url and paste_url.startswith("http"):
+            await query.answer("Web log ready!")
             btn = ButtonMaker()
-            btn.url_button("📨 Open Web Log (Spacebin)", resp.url, style=ButtonStyle.PRIMARY)
+            btn.url_button("📨 Open Web Log", paste_url, style=ButtonStyle.PRIMARY)
             await edit_reply_markup(message, btn.build_menu(1))
         else:
-            await query.answer("Web paste failed! Check logs.", show_alert=True)
+            await query.answer("Web paste failed! Use Log Disp instead.", show_alert=True)

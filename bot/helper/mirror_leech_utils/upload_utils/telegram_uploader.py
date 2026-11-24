@@ -727,6 +727,13 @@ class TelegramUploader:
         res = await self._msg_to_reply()
         if not res:
             return
+        if TgClient.user is not None and self._listener.up_dest:
+            try:
+                await TgClient.ensure_peer(
+                    TgClient.user, self._listener.up_dest, fallback_client=TgClient.bot
+                )
+            except Exception:
+                pass
         # Pre-cache media info for the primary download path so that after
         # proceed_split removes the original and only .001/.002 parts remain,
         # captions still show languages/quality from the merged source.
