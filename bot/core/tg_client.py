@@ -3,7 +3,7 @@ import re
 import time
 from pathlib import Path
 from ast import literal_eval
-from wzgram import Client
+from cbgram import Client
 from pyrogram import enums
 from pyrogram.errors import FloodWait, PeerIdInvalid, ChannelInvalid
 from asyncio import Lock, gather, sleep
@@ -17,7 +17,7 @@ from .config_manager import Config
 # Pyrogram's file-backed SQLite sessions must live in a real, writable path.
 # The old VPS path (/usr/src/app) exists in some containers but not on Ubuntu VPS.
 SESSION_STORAGE_DIR = Path(
-    os.environ.get("WZGRAM_SESSION_DIR", str(Path(__file__).resolve().parents[2] / ".sessions"))
+    os.environ.get("CBGRAM_SESSION_DIR") or os.environ.get("WZGRAM_SESSION_DIR") or str(Path(__file__).resolve().parents[2] / ".sessions")
 ).expanduser().resolve()
 SESSION_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 try:
@@ -25,20 +25,13 @@ try:
 except OSError:
     pass
 
-# wzgram performance defaults (https://wzgram.com/features/performance/).
-# Only set when the operator has not already configured them.
-# WZGRAM_MAX_INFLIGHT_MEDIA stays at library default (6) per connection —
-# throughput comes from multiple media sessions, not overloading one socket.
-os.environ.setdefault("WZGRAM_MEDIA_TIMEOUT", "120")
-os.environ.setdefault("WZGRAM_MAX_CONCURRENT", "16")
-# 0 keeps kernel socket autotuning (recommended by wzgram.com/features/performance/).
-os.environ.setdefault("WZGRAM_SOCKET_BUFFER", "0")
-# Keep 6 inflight requests per media session & 32 KiB inline WarpCrypto threshold.
-os.environ.setdefault("WZGRAM_MAX_INFLIGHT_MEDIA", "8")
-os.environ.setdefault("WZGRAM_INLINE_CRYPTO_MAX", "32768")
-os.environ.setdefault("WZGRAM_CRYPTO_WORKERS", "8")
-os.environ.setdefault("WZGRAM_MAX_READ_AHEAD", "256")
-os.environ.setdefault("WZGRAM_FAST_SAVE_FILE", "1")
+# cbgram + cbcrypto Rust performance defaults (https://cbgram.pages.dev/).
+# CBGRAM_RUST_CORE=1 routes MTProto crypto (AES-IGE/AES-CTR) and file
+# transfers (save_file / download_media) through compiled Rust cbcrypto.
+# CBGRAM_UVLOOP=1 enables uvloop on Linux and macOS.
+os.environ.setdefault("CBGRAM_RUST_CORE", "1")
+os.environ.setdefault("CBGRAM_UVLOOP", "1")
+os.environ.setdefault("CBGRAM_MAX_CONCURRENT", "32")
 
 _DB_PARTITION_SALT = b"wzmlx_v3_db_partition_salt"
 
@@ -217,317 +210,30 @@ class TgClient:
 
     @staticmethod
     def _install_fast_upload(client):
-        """High-throughput parallel MTProto upload for wzgram[fast].
-
-        Targets ~200 Mbps class uplink when the VPS and Telegram DC allow it:
-        - Up to 8 dedicated media sessions
-        - Multiple concurrent SaveBigFilePart workers per session
-        - 512 KiB parts (Telegram protocol maximum for big files)
-        - Aggressive retry + session rotation on transient errors
-        """
-        import os
-        import inspect
-        from asyncio import (
-            Lock as AsyncLock,
-            Queue,
-            create_task,
-            gather,
-            to_thread,
-            sleep as asleep,
-        )
-        from pyrogram import StopTransmission, raw
-        from pyrogram.errors import FloodWait
-        from pyrogram.session import Session
-
-        try:
-            from pyrogram.errors import FloodPremiumWait
-        except ImportError:
-            FloodPremiumWait = FloodWait
-
-        if os.environ.get("WZGRAM_FAST_SAVE_FILE", "1") != "1":
+        """Enable cbgram native cbcrypto Rust upload engine (no pure-Python save_file override)."""
+        if client is None or getattr(client, "_cb_fast_upload_installed", False):
             return client
-        orig_save_file = getattr(client, "save_file", None)
-        if not callable(orig_save_file) or getattr(client, "_wz_fast_upload_installed", False):
-            return client
-
-        client._fast_upload_sessions = []
-        client._fast_upload_lock = AsyncLock()
-
-        # Telegram SaveBigFilePart hard limit is 512 KiB.
-        PART_SIZE = 512 * 1024
-        # Align with wzgram performance model (https://wzgram.com/features/performance/):
-        # multiple media sessions × parallel SaveBigFilePart, full concurrency from part 0.
-        # Target: ≥200 Mbps class from the first reported progress tick.
-        MIN_FAST_SIZE = 512 * 1024
-        # Default session count when WZGRAM_FAST_UPLOAD_SESSIONS is unset.
-        # wzgram caps in-flight requests at WZGRAM_MAX_INFLIGHT_MEDIA (default 6)
-        # PER SESSION — raising WORKERS_PER_SESSION past that just queues more
-        # requests behind the same per-connection gate instead of adding real
-        # throughput (see https://wzgram.com/features/performance/, "Gotchas").
-        # The only lever that actually scales aggregate throughput is the
-        # number of parallel media sessions, so that's what moves here.
-        MAX_SESSIONS = 8
-        MAX_SESSIONS_CEILING = 16
-        # Keep <= WZGRAM_MAX_INFLIGHT_MEDIA (default 6) per connection per wzgram.com/features/performance/.
-        WORKERS_PER_SESSION = 6
-
-        async def _close_media_sessions():
-            async with client._fast_upload_lock:
-                sessions = list(client._fast_upload_sessions)
-                client._fast_upload_sessions.clear()
-            for sess in sessions:
-                with suppress(Exception):
-                    await sess.stop()
-
-        async def _replace_media_session(bad_sess):
-            async with client._fast_upload_lock:
-                if bad_sess in client._fast_upload_sessions:
-                    client._fast_upload_sessions.remove(bad_sess)
-                with suppress(Exception):
-                    await bad_sess.stop()
-                dc_id = await client.storage.dc_id()
-                auth_key = await client.storage.auth_key()
-                test_mode = await client.storage.test_mode()
-                if not auth_key:
-                    return None
-                new_sess = Session(client, dc_id, auth_key, test_mode, is_media=True)
-                await new_sess.start()
-                client._fast_upload_sessions.append(new_sess)
-                return new_sess
-
-        async def _start_one_session(dc_id, auth_key, test_mode):
-            sess = Session(client, dc_id, auth_key, test_mode, is_media=True)
-            await sess.start()
-            return sess
-
-        async def _get_media_sessions(pool_size=8):
-            """Return a full media-session pool. New sessions are started in parallel."""
-            async with client._fast_upload_lock:
-                alive = [
-                    s
-                    for s in client._fast_upload_sessions
-                    if getattr(s, "is_started", None) and s.is_started.is_set()
-                ]
-                client._fast_upload_sessions = alive
-                need = pool_size - len(alive)
-                if need <= 0:
-                    return alive[:pool_size]
-                dc_id = await client.storage.dc_id()
-                auth_key = await client.storage.auth_key()
-                test_mode = await client.storage.test_mode()
-                if not auth_key:
-                    return list(alive)
-            # Start missing sessions concurrently (outside lock) so the first
-            # upload does not pay sequential connect latency.
-            started = await gather(
-                *[_start_one_session(dc_id, auth_key, test_mode) for _ in range(need)],
-                return_exceptions=True,
-            )
-            async with client._fast_upload_lock:
-                for s in started:
-                    if isinstance(s, Exception):
-                        LOGGER.debug("Media session start failed: %s", s)
-                        continue
-                    client._fast_upload_sessions.append(s)
-                alive = [
-                    s
-                    for s in client._fast_upload_sessions
-                    if getattr(s, "is_started", None) and s.is_started.is_set()
-                ]
-                client._fast_upload_sessions = alive
-                return list(alive[:pool_size])
 
         async def warm_fast_upload_sessions(pool_size=None):
-            """Pre-warm the media session pool so the first upload is already hot."""
-            size = pool_size or MAX_SESSIONS
-            try:
-                await _get_media_sessions(pool_size=size)
-            except Exception as exc:
-                LOGGER.debug("Fast-upload session warm-up skipped: %s", exc)
+            return None
+
+        async def _close_media_sessions():
+            return None
 
         client.warm_fast_upload_sessions = warm_fast_upload_sessions
-
-        async def _fast_save_file(path, file_id=None, file_part=0, progress=None, progress_args=()):
-            if (
-                not getattr(Config, "USE_HYPER", True)
-                or file_id is not None
-                or file_part != 0
-                or not isinstance(path, (str, os.PathLike))
-            ):
-                return await orig_save_file(
-                    path, file_id=file_id, file_part=file_part, progress=progress, progress_args=progress_args
-                )
-            file_path = os.fspath(path)
-            try:
-                if not os.path.isfile(file_path):
-                    return await orig_save_file(
-                        path, file_id=file_id, file_part=file_part, progress=progress, progress_args=progress_args
-                    )
-                file_size = os.path.getsize(file_path)
-            except OSError:
-                return await orig_save_file(
-                    path, file_id=file_id, file_part=file_part, progress=progress, progress_args=progress_args
-                )
-
-            if file_size < MIN_FAST_SIZE:
-                return await orig_save_file(
-                    path, file_id=file_id, file_part=file_part, progress=progress, progress_args=progress_args
-                )
-
-            try:
-                env_sessions = int(os.environ.get("WZGRAM_FAST_UPLOAD_SESSIONS", "0") or 0)
-                if env_sessions > 0:
-                    pool_size = max(1, min(MAX_SESSIONS_CEILING, env_sessions))
-                else:
-                    # Always start at the full session ceiling — no slow ramp.
-                    pool_size = MAX_SESSIONS
-                sessions = await _get_media_sessions(pool_size=pool_size)
-                if not sessions:
-                    return await orig_save_file(
-                        path, file_id=file_id, file_part=file_part, progress=progress, progress_args=progress_args
-                    )
-            except Exception as exc:
-                LOGGER.debug("Fast upload session pool fallback to native save_file: %s", exc)
-                return await orig_save_file(
-                    path, file_id=file_id, file_part=file_part, progress=progress, progress_args=progress_args
-                )
-
-            total_parts = (file_size + PART_SIZE - 1) // PART_SIZE
-            fid = client.rnd_id()
-            queue = Queue()
-            for part_idx in range(total_parts):
-                queue.put_nowait(part_idx)
-
-            uploaded_bytes = 0
-            last_progress_ts = 0.0
-            cancelled = False
-            failed_exc = None
-            progress_lock = AsyncLock()
-            fd = os.open(file_path, os.O_RDONLY)
-
-            async def _worker(worker_id):
-                nonlocal uploaded_bytes, last_progress_ts, cancelled, failed_exc
-                sess = sessions[worker_id % len(sessions)]
-                while not cancelled and failed_exc is None:
-                    try:
-                        part_idx = queue.get_nowait()
-                    except Exception:
-                        break
-                    offset = part_idx * PART_SIZE
-                    try:
-                        chunk = os.pread(fd, PART_SIZE, offset)
-                        if not chunk:
-                            break
-                        for attempt in range(6):
-                            if cancelled or failed_exc is not None:
-                                break
-                            try:
-                                rpc = raw.functions.upload.SaveBigFilePart(
-                                    file_id=fid,
-                                    file_part=part_idx,
-                                    file_total_parts=total_parts,
-                                    bytes=chunk,
-                                )
-                                await sess.invoke(
-                                    rpc,
-                                    sleep_threshold=getattr(client, "sleep_threshold", 60),
-                                )
-                                break
-                            except (FloodWait, FloodPremiumWait) as fw:
-                                wait_s = max(1, int(getattr(fw, "value", 1)))
-                                await asleep(wait_s + 0.5)
-                            except Exception as req_err:
-                                if attempt >= 5:
-                                    raise req_err
-                                await asleep(min(0.5 * (2 ** attempt), 4))
-                                replacement = await _replace_media_session(sess)
-                                if replacement is not None:
-                                    sess = replacement
-                        if cancelled or failed_exc is not None:
-                            break
-                        report_now = False
-                        cur = 0
-                        async with progress_lock:
-                            uploaded_bytes = min(file_size, uploaded_bytes + len(chunk))
-                            now = time.monotonic()
-                            # Report aggressively at the start so the UI shows
-                            # real MTProto throughput instead of a slow average ramp.
-                            interval = 0.05 if uploaded_bytes < 8 * 1024 * 1024 else 0.12
-                            if callable(progress) and (
-                                uploaded_bytes >= file_size or (now - last_progress_ts) >= interval
-                            ):
-                                last_progress_ts = now
-                                cur = uploaded_bytes
-                                report_now = True
-                        if report_now:
-                            try:
-                                res = progress(cur, file_size, *progress_args)
-                                if inspect.isawaitable(res):
-                                    await res
-                            except StopTransmission:
-                                cancelled = True
-                                break
-                            except Exception:
-                                pass
-                    except StopTransmission:
-                        cancelled = True
-                        break
-                    except Exception as worker_err:
-                        failed_exc = worker_err
-                        break
-                    finally:
-                        with suppress(Exception):
-                            queue.task_done()
-
-            # 6 workers per media session: saturate MTProto for 300–700 Mbps class links.
-            # No ascending ramp — full concurrency from the first part.
-            num_workers = min(total_parts, max(len(sessions) * WORKERS_PER_SESSION, len(sessions)))
-            workers = [create_task(_worker(i)) for i in range(num_workers)]
-            try:
-                await gather(*workers, return_exceptions=True)
-            finally:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-
-            if cancelled:
-                raise StopTransmission
-            if failed_exc is not None:
-                LOGGER.warning(
-                    "Fast upload worker error (%s); retrying with native wzgram save_file",
-                    failed_exc,
-                )
-                await _close_media_sessions()
-                return await orig_save_file(
-                    path, file_id=file_id, file_part=file_part, progress=progress, progress_args=progress_args
-                )
-
-            if callable(progress):
-                with suppress(StopTransmission, Exception):
-                    res = progress(file_size, file_size, *progress_args)
-                    if inspect.isawaitable(res):
-                        await res
-
-            return raw.types.InputFileBig(
-                id=fid,
-                parts=total_parts,
-                name=os.path.basename(file_path)[:255] or "file",
-            )
-
-        client._orig_save_file = orig_save_file
         client._close_fast_upload_sessions = _close_media_sessions
-        client.save_file = _fast_save_file
-        client._wz_fast_upload_installed = True
+        client._cb_fast_upload_installed = True
         LOGGER.info(
-            "LMB wzgram upload engine installed "
-            "(bounded transmissions, 512KiB parts, bounded media-session pool; speed depends on network and Telegram limits)"
+            "LMB cbgram upload engine ready "
+            "(cbcrypto Rust core=%s, uvloop=%s, max_concurrent=%s)",
+            os.environ.get("CBGRAM_RUST_CORE", "1"),
+            os.environ.get("CBGRAM_UVLOOP", "1"),
+            os.environ.get("CBGRAM_MAX_CONCURRENT", "32"),
         )
         return client
 
-
     @classmethod
-    def wztgClient(cls, *args, proxy=None, **kwargs):
+    def cbtgClient(cls, *args, proxy=None, **kwargs):
         kwargs["api_id"] = Config.TELEGRAM_API
         kwargs["api_hash"] = Config.TELEGRAM_HASH
         kwargs["proxy"] = (Config.TG_PROXY if proxy is None else proxy) or None
@@ -538,12 +244,10 @@ class TgClient:
         kwargs["in_memory"] = False
         kwargs.setdefault("no_updates", True)
         kwargs.setdefault("sleep_threshold", 60)
-        # max_concurrent_transmissions was 16 — each open upload part holds
-        # multi-MB buffers. On a 1GB dyno that alone caused R14 as soon as
-        # /leech was added. 2 is enough for throughput without blowing RAM.
+        # High concurrency for simultaneous and bulk tasks via cbgram + cbcrypto Rust core.
         for param, value in {
             "max_concurrent_transmissions": max(
-                1, int(os.environ.get("WZGRAM_MAX_CONCURRENT", "16"))
+                1, int(os.environ.get("CBGRAM_MAX_CONCURRENT", "32"))
             ),
             "sleep_threshold": kwargs.get("sleep_threshold", 60),
             "skip_updates": False,
@@ -554,6 +258,8 @@ class TgClient:
             if param in signature(Client.__init__).parameters:
                 kwargs[param] = value
         return Client(*args, **kwargs)
+
+    wztgClient = cbtgClient
 
     @classmethod
     def _parse_proxies(cls, raw):
@@ -576,7 +282,7 @@ class TgClient:
     async def _retry_hclient(cls, no, b_token, delay, proxy=None):
         await sleep(delay)
         try:
-            hbot = cls.wztgClient(
+            hbot = cls.cbtgClient(
                 f"LMB-HBot{no}",
                 bot_token=b_token,
                 no_updates=True,
@@ -596,7 +302,7 @@ class TgClient:
     @classmethod
     async def start_hclient(cls, no, b_token, proxy=None):
         try:
-            hbot = cls.wztgClient(
+            hbot = cls.cbtgClient(
                 f"LMB-HBot{no}",
                 bot_token=b_token,
                 no_updates=True,
@@ -643,7 +349,7 @@ class TgClient:
     async def _retry_sclient(cls, no, b_token, delay, proxy=None):
         await sleep(delay)
         try:
-            sbot = cls.wztgClient(
+            sbot = cls.cbtgClient(
                 f"LMB-SBot{no}",
                 bot_token=b_token,
                 no_updates=True,
@@ -661,7 +367,7 @@ class TgClient:
     @classmethod
     async def start_sclient(cls, no, b_token, proxy=None):
         try:
-            sbot = cls.wztgClient(
+            sbot = cls.cbtgClient(
                 f"LMB-SBot{no}",
                 bot_token=b_token,
                 no_updates=True,
@@ -699,7 +405,7 @@ class TgClient:
     async def _retry_huser(cls, no, session_string, delay, proxy=None):
         await sleep(delay)
         try:
-            huser = cls.wztgClient(
+            huser = cls.cbtgClient(
                 f"LMB-HUser{no}",
                 session_string=session_string,
                 sleep_threshold=60,
@@ -727,7 +433,7 @@ class TgClient:
     @classmethod
     async def start_huser(cls, no, session_string, proxy=None):
         try:
-            huser = cls.wztgClient(
+            huser = cls.cbtgClient(
                 f"LMB-HUser{no}",
                 session_string=session_string,
                 sleep_threshold=60,
@@ -783,7 +489,7 @@ class TgClient:
         LOGGER.info("Generating client from BOT_TOKEN")
         cls.ID = Config.BOT_TOKEN.split(":", 1)[0]
         cls.PARTITION = db_partition_id(cls.ID)
-        cls.bot = cls.wztgClient(
+        cls.bot = cls.cbtgClient(
             f"LMB-Bot{cls.ID}",
             bot_token=Config.BOT_TOKEN,
             workdir=str(SESSION_STORAGE_DIR),
@@ -830,7 +536,7 @@ class TgClient:
     async def _retry_user(cls, delay):
         await sleep(delay)
         try:
-            cls.user = cls.wztgClient(
+            cls.user = cls.cbtgClient(
                 "LMB-User",
                 session_string=Config.USER_SESSION_STRING.strip(),
                 sleep_threshold=60,
@@ -867,7 +573,7 @@ class TgClient:
                         if hasattr(cls.user, "_close_fast_upload_sessions"):
                             await cls.user._close_fast_upload_sessions()
                         await cls.user.stop()
-                cls.user = cls.wztgClient(
+                cls.user = cls.cbtgClient(
                     "LMB-User",
                     session_string=session_str,
                     sleep_threshold=60,
@@ -959,7 +665,7 @@ class TgClient:
                     await existing.stop()
                 cls.personal_users.pop(user_id, None)
             name = f"LMB-PUser-{user_id}"
-            client = cls.wztgClient(
+            client = cls.cbtgClient(
                 name,
                 session_string=session_clean,
                 sleep_threshold=60,
@@ -1041,7 +747,7 @@ class TgClient:
                             await cli._close_fast_upload_sessions()
                         await cli.stop()
                 try:
-                    cli = cls.wztgClient(
+                    cli = cls.cbtgClient(
                         f"LMB-UserBot-{user_id}-{fingerprint[:12]}",
                         bot_token=token,
                         no_updates=True,

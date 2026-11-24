@@ -1,12 +1,12 @@
 # LMB
 
-**LMB** is a high-performance Telegram mirror and leech bot built for Linux VPS deployments. Powered by the **`wzgram`** MTProto framework (`WarpCrypto` + parallel media sessions), LMB delivers maximum download and instant Telegram upload throughput alongside full media processing, user settings, verification controls, and smart resource-aware task queueing.
+**LMB** is a high-performance Telegram mirror and leech bot built for Linux VPS deployments. Powered by the **`cbgram`** MTProto framework (`cbcrypto` + parallel media sessions), LMB delivers maximum download and instant Telegram upload throughput alongside full media processing, user settings, verification controls, and smart resource-aware task queueing.
 
 > **Deployment Note:** Reliable operation requires valid Telegram credentials (`BOT_TOKEN`, `TELEGRAM_API`, `TELEGRAM_HASH`), a reachable MongoDB instance (`DATABASE_URL`), supported system packages (`ffmpeg`, `aria2c`, `qbittorrent-nox`, `rclone`, `7z`), and a properly configured Linux VPS.
 
 ## Key Features
 
-- **High-Speed Transfers (`wzgram` MTProto):** Uses `wzgram[fast]` with `WarpCrypto` Rust cryptography, 512 KiB `SaveBigFilePart` chunks, 8 pre-warmed media sessions (up to 48 concurrent workers), `WZGRAM_MAX_CONCURRENT=16`, and zero artificial upload delays for immediate, full-speed Telegram uploads.
+- **High-Speed Transfers (`cbgram` MTProto):** Uses `cbgram[fast]` with `cbcrypto` Rust cryptography, 512 KiB `SaveBigFilePart` chunks, 8 pre-warmed media sessions (up to 48 concurrent workers), `CBGRAM_MAX_CONCURRENT=16`, and zero artificial upload delays for immediate, full-speed Telegram uploads.
 - **Maximized Download Engines:**
   - **Telegram (`HypertgDownload`):** 1 MiB `GetFile` chunks from the first request, deep pipelining, and multi-client helper pooling.
   - **Aria2 / Direct HTTP (`a2c.conf`):** 32 connections per server, 32 splits, 512 KiB minimum split size, 512 MiB disk cache, and `optimize-concurrent-downloads=true`.
@@ -92,8 +92,8 @@ Optional start-menu customization variables: `START_REPO_URL`, `START_REPO_BUTTO
 Optional speed tuning variables:
 - `USER_SESSION_STRING` — Telegram Premium user session for >2 GiB uploads and high-speed primary hops.
 - `HELPER_TOKENS` / `HELPER_STRINGS` — Extra bot/user clients for parallel `HypertgDownload` and `HypertgUpload`.
-- `WZGRAM_MAX_CONCURRENT` — Concurrent transmissions per client (default `16`).
-- `WZGRAM_FAST_UPLOAD_SESSIONS` — Parallel media sessions per upload (default `8`, ceiling `16`).
+- `CBGRAM_MAX_CONCURRENT` — Concurrent transmissions per client (default `16`).
+- `CBGRAM_RUST_CORE` — Parallel media sessions per upload (default `8`, ceiling `16`).
 
 Never commit real bot tokens, API hashes, session strings, or database URIs to version control.
 

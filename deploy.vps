@@ -66,11 +66,11 @@ cd "$APP_DIR"
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
 # Persistent Pyrogram session database directory (bot + user session strings).
-export WZGRAM_SESSION_DIR="${WZGRAM_SESSION_DIR:-$APP_DIR/.sessions}"
-mkdir -p "$WZGRAM_SESSION_DIR" || fail "Cannot create Telegram session directory: $WZGRAM_SESSION_DIR"
-chmod 700 "$WZGRAM_SESSION_DIR" || fail "Cannot secure Telegram session directory: $WZGRAM_SESSION_DIR"
-if [[ ! -w "$WZGRAM_SESSION_DIR" ]]; then
-  fail "Telegram session directory is not writable: $WZGRAM_SESSION_DIR"
+export CBGRAM_SESSION_DIR="${CBGRAM_SESSION_DIR:-${CBGRAM_SESSION_DIR:-$APP_DIR/.sessions}}"
+mkdir -p "$CBGRAM_SESSION_DIR" || fail "Cannot create Telegram session directory: $CBGRAM_SESSION_DIR"
+chmod 700 "$CBGRAM_SESSION_DIR" || fail "Cannot secure Telegram session directory: $CBGRAM_SESSION_DIR"
+if [[ ! -w "$CBGRAM_SESSION_DIR" ]]; then
+  fail "Telegram session directory is not writable: $CBGRAM_SESSION_DIR"
 fi
 sed -i 's/\r$//' start.sh deploy.vps deploy-user.vps one-click-deploy.sh setpkgs.sh 2>/dev/null || true
 chmod +x start.sh deploy.vps deploy-user.vps one-click-deploy.sh setpkgs.sh 2>/dev/null || true
@@ -184,15 +184,17 @@ echo "[2/6] Creating virtual environment and installing requirements..."
 if [[ ! -x venv/bin/python ]]; then python3 -m venv venv; fi
 venv/bin/python -m pip install --upgrade --prefer-binary pip setuptools wheel
 venv/bin/python -m pip install --prefer-binary -r requirements.txt
-# Keep the Telegram framework on the verified current WzGram release instead
-# of reusing a stale package from an existing VPS virtualenv.
-venv/bin/python -m pip install --upgrade --prefer-binary "wzgram[fast]"
-venv/bin/python - <<'PY_WZGRAM'
+# Uninstall conflicting Pyrogram forks before installing cbgram + cbcrypto
+# (they share the pyrogram/ namespace per https://cbgram.pages.dev/).
+venv/bin/python -m pip uninstall -y pyrogram kurigram pyrofork wzgram wzxpyro >/dev/null 2>&1 || true
+venv/bin/python -m pip install --upgrade --prefer-binary "cbgram[fast]" cbcrypto
+venv/bin/python - <<'PY_CBGRAM'
 from importlib.metadata import version
-installed = version("wzgram")
-print(f"WzGram version: {installed}")
-print("WzGram upgraded to the newest release available from the configured package index.")
-PY_WZGRAM
+import cbcrypto
+installed = version("cbgram")
+print(f"CBGram version: {installed}")
+print(f"cbcrypto backend: {cbcrypto.backend()}")
+PY_CBGRAM
 # Explicitly install bundled plugin dependencies as well; older deployments may
 # have a venv created before the IMDb/MediaInfo plugins were added.
 venv/bin/python -m pip install --upgrade --prefer-binary imdbinfo pycountry aiofiles pyyaml "numpy>=1.26,<3"

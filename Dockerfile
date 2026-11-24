@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 RUN test -x /wzvenv/bin/python || (echo "ERROR: base image does not provide /wzvenv/bin/python" >&2; exit 1)
 
 COPY requirements.txt .
-RUN uv pip install --python /wzvenv/bin/python --no-cache-dir -U -r requirements.txt && uv pip install --python /wzvenv/bin/python --no-cache-dir -U "wzgram[fast]"
+RUN uv pip uninstall --python /wzvenv/bin/python -y pyrogram kurigram pyrofork wzgram wzxpyro || true && uv pip install --python /wzvenv/bin/python --no-cache-dir -U -r requirements.txt && uv pip install --python /wzvenv/bin/python --no-cache-dir -U "cbgram[fast]" cbcrypto
 ENV CANTARELLABOTS_MEGA_SDK_VERSION=10.20.20
 RUN uv pip install --python /wzvenv/bin/python --no-cache-dir --no-deps "mega.py>=1.0.8"
 

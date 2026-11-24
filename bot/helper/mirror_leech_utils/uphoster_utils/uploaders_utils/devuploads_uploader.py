@@ -3,7 +3,7 @@ from os import path as ospath
 from os import walk as oswalk
 
 from aiofiles.os import path as aiopath
-from aiohttp import ClientSession, FormData
+from aiohttp import ClientSession, ClientTimeout, FormData
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -20,6 +20,8 @@ from ..base import BaseUpload
 from ..common import ProgressFileReader
 
 LOGGER = getLogger(__name__)
+
+_UPLOAD_TIMEOUT = ClientTimeout(total=None, sock_connect=30, sock_read=300)
 
 
 class DevUploadsUpload(BaseUpload):
@@ -41,7 +43,7 @@ class DevUploadsUpload(BaseUpload):
         return user_dict.get("DEVUPLOADS_FOLDER") or Config.DEVUPLOADS_FOLDER or ""
 
     async def __get_upload_server(self):
-        async with ClientSession() as session:
+        async with ClientSession(timeout=_UPLOAD_TIMEOUT) as session:
             async with session.get(f"{self.server_api_url}?key={self.token}") as resp:
                 result = await resp.json(content_type=None)
                 if result.get("status") == 200:
@@ -51,7 +53,7 @@ class DevUploadsUpload(BaseUpload):
                 raise Exception(f"Failed to get upload server: {result}")
 
     async def __set_file_folder(self, file_code: str):
-        async with ClientSession() as session:
+        async with ClientSession(timeout=_UPLOAD_TIMEOUT) as session:
             url = (
                 f"https://devuploads.com/api/file/set_folder"
                 f"?key={self.token}&file_code={file_code}&fld_id={self._user_folder}"
@@ -69,6 +71,7 @@ class DevUploadsUpload(BaseUpload):
     async def upload_file(self, path: str):
         if self.listener.is_cancelled:
             return None
+        self.last_uploaded = 0
         file_name = ospath.basename(path)
         with ProgressFileReader(
             filename=path, read_callback=self._progress_callback
@@ -77,9 +80,9 @@ class DevUploadsUpload(BaseUpload):
             data.add_field("sess_id", self._sess_id)
             data.add_field("utype", "reg")
             data.add_field("file", file, filename=file_name)
-            async with ClientSession() as session:
+            async with ClientSession(timeout=_UPLOAD_TIMEOUT) as session:
                 async with session.post(
-                    self._server_url, data=data, timeout=3600
+                    self._server_url, data=data
                 ) as resp:
                     result = await resp.json(content_type=None)
                     if isinstance(result, list):

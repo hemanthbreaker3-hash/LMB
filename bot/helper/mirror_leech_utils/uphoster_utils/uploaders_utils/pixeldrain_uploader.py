@@ -3,7 +3,9 @@ from os import path as ospath
 from os import walk as oswalk
 
 from aiofiles.os import path as aiopath
-from aiohttp import BasicAuth, ClientSession
+from urllib.parse import quote
+
+from aiohttp import BasicAuth, ClientSession, ClientTimeout
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -17,6 +19,8 @@ from ..base import BaseUpload
 from ..common import ProgressFileReader
 
 LOGGER = getLogger(__name__)
+
+_UPLOAD_TIMEOUT = ClientTimeout(total=None, sock_connect=30, sock_read=300)
 
 
 class PixelDrainUpload(BaseUpload):
@@ -42,11 +46,12 @@ class PixelDrainUpload(BaseUpload):
         retry=retry_if_exception_type(Exception),
     )
     async def upload_aiohttp(self, url, file_path, file_name):
+        self.last_uploaded = 0
         auth = BasicAuth("", self.token) if self.token else None
         with ProgressFileReader(
             filename=file_path, read_callback=self._progress_callback
         ) as file:
-            async with ClientSession(auth=auth) as session:
+            async with ClientSession(auth=auth, timeout=_UPLOAD_TIMEOUT) as session:
                 async with session.put(f"{url}{file_name}", data=file) as resp:
                     if resp.status in [200, 201]:
                         return await self.__resp_handler(
@@ -64,7 +69,7 @@ class PixelDrainUpload(BaseUpload):
             return None
         data = {"title": title, "files": files, "anonymous": False}
         auth = BasicAuth("", self.token)
-        async with ClientSession(auth=auth) as session:
+        async with ClientSession(auth=auth, timeout=_UPLOAD_TIMEOUT) as session:
             async with session.post(f"{self.api_url}list", json=data) as resp:
                 if resp.status in [200, 201]:
                     res = await resp.json(content_type=None)
@@ -75,7 +80,7 @@ class PixelDrainUpload(BaseUpload):
     async def upload_file(self, path: str):
         if self.listener.is_cancelled:
             return None
-        file_name = ospath.basename(path).replace(" ", ".")
+        file_name = quote(ospath.basename(path), safe="")
         url = f"{self.api_url}file/"
         return await self.upload_aiohttp(url, path, file_name)
 

@@ -2,10 +2,9 @@ from json import JSONDecodeError
 from logging import getLogger
 from os import path as ospath
 from os import walk as oswalk
-from random import choice
 
 from aiofiles.os import path as aiopath
-from aiohttp import ClientSession, FormData
+from aiohttp import ClientSession, ClientTimeout, FormData
 from aiohttp.client_exceptions import ContentTypeError
 from tenacity import (
     retry,
@@ -22,6 +21,8 @@ from ..common import ProgressFileReader
 
 LOGGER = getLogger(__name__)
 
+_UPLOAD_TIMEOUT = ClientTimeout(total=None, sock_connect=30, sock_read=300)
+
 
 class GoFileUpload(BaseUpload):
     SERVICE_NAME = "GoFile"
@@ -31,6 +32,7 @@ class GoFileUpload(BaseUpload):
     def __init__(self, listener, path, folder_name=""):
         super().__init__(listener, path, folder_name)
         self.api_url = "https://api.gofile.io/"
+        self.upload_url = "https://upload.gofile.io/uploadfile"
         from bot import user_data
 
         user_dict = user_data.get(self.listener.user_id, {})
@@ -45,47 +47,59 @@ class GoFileUpload(BaseUpload):
 
     @staticmethod
     async def is_goapi(token):
-        if token is None:
+        if not token:
             return False
         headers = {"Authorization": f"Bearer {token}"}
         async with (
-            ClientSession() as session,
+            ClientSession(timeout=_UPLOAD_TIMEOUT) as session,
             session.get(
-                "https://api.gofile.io/accounts/website", headers=headers
+                "https://api.gofile.io/accounts/getid", headers=headers
             ) as resp,
         ):
-            res = await resp.json()
+            res = await resp.json(content_type=None)
             return res.get("status") == "ok"
 
     async def __resp_handler(self, response):
         if (api_resp := response.get("status", "")) == "ok":
             return response["data"]
         raise Exception(
-            api_resp.split("-")[1]
+            api_resp.split("-", 1)[1]
             if "error-" in api_resp
-            else "Response Status is not ok and Reason is Unknown"
+            else f"GoFile API error: {response}"
         )
 
-    async def __getServer(self):
-        async with ClientSession() as session:
-            async with session.get(f"{self.api_url}servers") as resp:
-                return await self.__resp_handler(await resp.json())
+    async def __create_guest_account(self):
+        async with (
+            ClientSession(timeout=_UPLOAD_TIMEOUT) as session,
+            session.post(f"{self.api_url}accounts", json={}) as resp,
+        ):
+            data = await self.__resp_handler(await resp.json(content_type=None))
+            self.token = data.get("token", "")
+            return data
 
     async def __getAccount(self, check_account=False):
-        if self.token is None:
-            raise Exception("GoFile API token not found!")
-        headers = {"Authorization": f"Bearer {self.token}"}
-        async with (
-            ClientSession() as session,
-            session.get(f"{self.api_url}accounts/website", headers=headers) as resp,
-        ):
-            res = await resp.json()
+        if not self.token:
             if check_account:
-                return res["status"] == "ok"
-            return await self.__resp_handler(res)
+                return False
+            return await self.__create_guest_account()
+        headers = {"Authorization": f"Bearer {self.token}"}
+        async with ClientSession(timeout=_UPLOAD_TIMEOUT) as session:
+            async with session.get(
+                f"{self.api_url}accounts/getid", headers=headers
+            ) as id_resp:
+                id_res = await id_resp.json(content_type=None)
+                if check_account:
+                    return id_res.get("status") == "ok"
+                id_data = await self.__resp_handler(id_res)
+                account_id = id_data["id"]
+            async with session.get(
+                f"{self.api_url}accounts/{account_id}", headers=headers
+            ) as resp:
+                res = await resp.json(content_type=None)
+                return await self.__resp_handler(res)
 
     async def __setOptions(self, contentId, option, value):
-        if self.token is None:
+        if not self.token:
             raise Exception("GoFile API token not found!")
         if option not in [
             "name",
@@ -96,16 +110,18 @@ class GoFileUpload(BaseUpload):
             "password",
         ]:
             raise Exception(f"Invalid GoFile Option Specified: {option}")
+        if option == "public" and isinstance(value, str):
+            value = value.lower() == "true"
         headers = {"Authorization": f"Bearer {self.token}"}
         async with (
-            ClientSession() as session,
+            ClientSession(timeout=_UPLOAD_TIMEOUT) as session,
             session.put(
                 url=f"{self.api_url}contents/{contentId}/update",
                 json={"attribute": option, "attributeValue": value},
                 headers=headers,
             ) as resp,
         ):
-            return await self.__resp_handler(await resp.json())
+            return await self.__resp_handler(await resp.json(content_type=None))
 
     @retry(
         wait=wait_exponential(multiplier=2, min=4, max=8),
@@ -113,20 +129,22 @@ class GoFileUpload(BaseUpload):
         retry=retry_if_exception_type(Exception),
     )
     async def upload_aiohttp(self, url, file_path, req_file, data):
+        self.last_uploaded = 0
+        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         with ProgressFileReader(
             filename=file_path, read_callback=self._progress_callback
         ) as file:
             form = FormData()
             for key, value in data.items():
-                form.add_field(key, value)
+                form.add_field(key, str(value))
             form.add_field(
-                req_file, file, filename=ospath.basename(file_path).replace(" ", ".")
+                req_file, file, filename=ospath.basename(file_path)
             )
-            async with ClientSession() as session:
-                async with session.post(url, data=form) as resp:
+            async with ClientSession(timeout=_UPLOAD_TIMEOUT) as session:
+                async with session.post(url, data=form, headers=headers) as resp:
                     if resp.status == 200:
                         try:
-                            return await resp.json()
+                            return await resp.json(content_type=None)
                         except (ContentTypeError, JSONDecodeError):
                             return {
                                 "status": "ok",
@@ -136,22 +154,22 @@ class GoFileUpload(BaseUpload):
                         raise Exception(f"HTTP {resp.status}: {await resp.text()}")
         return None
 
-    async def create_folder(self, parentFolderId, folderName=None):
-        if self.token is None:
+    async def create_folder(self, parentFolderId, folderName=None, public=True):
+        if not self.token:
             raise Exception("GoFile API token not found!")
         headers = {"Authorization": f"Bearer {self.token}"}
-        body = {"parentFolderId": parentFolderId}
+        body = {"parentFolderId": parentFolderId, "public": bool(public)}
         if folderName:
             body["folderName"] = folderName
         async with (
-            ClientSession() as session,
+            ClientSession(timeout=_UPLOAD_TIMEOUT) as session,
             session.post(
-                url=f"{self.api_url}contents/createfolder",
+                url=f"{self.api_url}contents/createFolder",
                 json=body,
                 headers=headers,
             ) as resp,
         ):
-            return await self.__resp_handler(await resp.json())
+            return await self.__resp_handler(await resp.json(content_type=None))
 
     async def upload_file(
         self,
@@ -164,24 +182,13 @@ class GoFileUpload(BaseUpload):
     ):
         if password and len(password) < 4:
             raise ValueError("Password Length must be greater than 4")
-        server = choice((await self.__getServer())["servers"])["name"]
         req_dict = {}
-        if self.token:
-            req_dict["token"] = self.token
         if folderId:
             req_dict["folderId"] = folderId
-        if description:
-            req_dict["description"] = description
-        if password:
-            req_dict["password"] = password
-        if tags:
-            req_dict["tags"] = tags
-        if expire:
-            req_dict["expire"] = expire
         if self.listener.is_cancelled:
             return None
         upload_file = await self.upload_aiohttp(
-            f"https://{server}.gofile.io/uploadfile",
+            self.upload_url,
             path,
             "file",
             req_dict,
@@ -200,14 +207,11 @@ class GoFileUpload(BaseUpload):
                     account_data = await self.__getAccount()
                     root_folder_id = account_data["rootFolder"]
                 folder_data = await self.create_folder(
-                    root_folder_id, self.folder_name or ospath.basename(input_directory)
+                    root_folder_id,
+                    self.folder_name or ospath.basename(input_directory),
+                    public=True,
                 )
                 parent_folder_id = folder_data.get("id") or folder_data["folderId"]
-                await self.__setOptions(
-                    contentId=parent_folder_id,
-                    option="public",
-                    value="true",
-                )
                 main_folder_code = folder_data["code"]
         else:
             main_folder_code = None
@@ -223,15 +227,10 @@ class GoFileUpload(BaseUpload):
             if rel_path != ".":
                 folder_name = ospath.basename(rel_path)
                 curr_folder_data = await self.create_folder(
-                    current_folder_id, folder_name
+                    current_folder_id, folder_name, public=True
                 )
                 curr_folder_id = (
                     curr_folder_data.get("id") or curr_folder_data["folderId"]
-                )
-                await self.__setOptions(
-                    contentId=curr_folder_id,
-                    option="public",
-                    value="true",
                 )
                 folder_ids[rel_path] = curr_folder_id
                 current_folder_id = curr_folder_id
@@ -246,9 +245,7 @@ class GoFileUpload(BaseUpload):
 
     async def _validate_token(self):
         if not self.token:
-            raise ValueError(
-                "GoFile API token not configured! Please set your GoFile token in user settings or configure a global token."
-            )
+            LOGGER.info("GoFile token not configured — creating guest account for upload.")
 
     async def _upload_process(self):
         try:
@@ -261,14 +258,9 @@ class GoFileUpload(BaseUpload):
             folder_code = ""
             if not folder_id and self.auto_create:
                 folder_data = await self.create_folder(
-                    account_data["rootFolder"], self.folder_name or None
+                    account_data["rootFolder"], self.folder_name or None, public=True
                 )
                 folder_id = folder_data.get("id") or folder_data["folderId"]
-                await self.__setOptions(
-                    contentId=folder_id,
-                    option="public",
-                    value="true",
-                )
                 folder_code = folder_data.get("code", "")
             else:
                 folder_id = folder_id or account_data["rootFolder"]

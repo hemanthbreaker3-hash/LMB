@@ -13,7 +13,7 @@ try:
 except Exception:
     print("\n[ERROR] Pyrogram not installed!")
     print("\nInstall required dependencies:")
-    print('  pip install "wzgram[fast]"')
+    print('  pip install "cbgram[fast]" cbcrypto')
     sys.exit(1)
 
 

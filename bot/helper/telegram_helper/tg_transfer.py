@@ -176,6 +176,9 @@ class HypertgTransfer:
             key = -(len(TgClient.helper_users) + 1)
             self.clients[key] = TgClient.user
             self.client_ids.append(key)
+        if TgClient.bot and all(c is not TgClient.bot for c in self.clients.values()):
+            self.clients[0] = TgClient.bot
+            self.client_ids.append(0)
         self.num_clients = len(self.clients)
         for i in self.client_ids:
             self.work_loads.setdefault(i, 0)

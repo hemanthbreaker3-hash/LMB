@@ -384,11 +384,11 @@ class TelegramUploader:
             except Exception as e:
                 LOGGER.warning(
                     "Unable to create upload starter with %s in chat %s: %s",
-                    "WZgram session" if sender_client is self._user_client else "primary client",
+                    "CBGram session" if sender_client is self._user_client else "primary client",
                     target_chat_id,
                     e,
                 )
-                # WZgram may not have met the target peer yet. Retry the same
+                # CBGram may not have met the target peer yet. Retry the same
                 # destination with the normal bot client before giving up.
                 if sender_client is not self._listener.client:
                     try:
@@ -585,7 +585,7 @@ class TelegramUploader:
         old_ids = [(msg[0], msg[1]) for msg in msgs]
         # Use the account that owns the source messages. In "both" mode the
         # previous selection incorrectly forced bot retrieval even when these
-        # messages had been uploaded by the WZGram user session.
+        # messages had been uploaded by the CBGram user session.
         owner_entries = [
             self._upload_seq[self._msg_to_seq[mid]]
             for mid in old_ids
@@ -796,10 +796,10 @@ class TelegramUploader:
                         delivered = True
                     except Exception as err:
                         LOGGER.warning(
-                            "WZgram/primary dump delivery failed for %s to %s: %s",
+                            "CBGram/primary dump delivery failed for %s to %s: %s",
                             entry.get("file_"), dest_chat, err,
                         )
-                        # If the personal WZgram session cannot resolve or
+                        # If the personal CBGram session cannot resolve or
                         # access the dump peer, retry with the same bot client
                         # used by the normal upload/delivery flow.
                         fallback_client = self._delivery_bot()

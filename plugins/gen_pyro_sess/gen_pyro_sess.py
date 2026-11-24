@@ -2,7 +2,7 @@ from asyncio import Event, wait_for, TimeoutError as AsyncTimeout
 from os.path import exists as path_exists
 
 from aiofiles.os import remove as aioremove
-from pyrogram import Client, __version__ as wzgram_version
+from pyrogram import Client, __version__ as cbgram_version
 from bot.version import get_version
 from pyrogram.enums import ChatType
 from pyrogram.filters import create, user, text, private
@@ -53,7 +53,7 @@ def _stop_btns():
 
 def _header(user_name):
     return (
-        "⌬ <u><i><b>WZGram String Session Generator</b></i></u>\n│\n"
+        "⌬ <u><i><b>CBGram String Session Generator</b></i></u>\n│\n"
         f"│ <b>User</b> → <b>{user_name}</b>!"
     )
 
@@ -339,9 +339,9 @@ async def gen_pyro_string(_, message):
         session_string = await pyro_client.export_session_string()
         await pyro_client.send_message(
             "me",
-            f"⌬ <b><u>WZGram Session Generated</u></b>\n\n"
+            f"⌬ <b><u>CBGram Session Generated</u></b>\n\n"
             f"<code>{session_string}</code>\n\n"
-            f"<b>WZGram v{wzgram_version} | CANTARELLABOTS {get_version()}</b>\n"
+            f"<b>CBGram v{cbgram_version} | CANTARELLABOTS {get_version()}</b>\n"
             f"<b>CANTARELLABOTS</b>",
             disable_web_page_preview=True,
         )
@@ -349,7 +349,7 @@ async def gen_pyro_string(_, message):
         await edit_message(
             sess_msg,
             f"{h}\n┃\n{c}\n┃\n"
-            "┠  <b>WZGram Session Generated Successfully!</b>\n"
+            "┠  <b>CBGram Session Generated Successfully!</b>\n"
             "┃\n"
             "┖ <i>Check your <b>Saved Messages</b>.</i>",
         )

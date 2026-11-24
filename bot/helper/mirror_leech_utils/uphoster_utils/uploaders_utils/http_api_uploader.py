@@ -7,13 +7,15 @@ an undocumented endpoint is stable.
 """
 from logging import getLogger
 from os import path as ospath, walk
-from aiohttp import ClientSession, FormData
+from aiohttp import ClientSession, ClientTimeout, FormData
 from aiofiles.os import path as aiopath
 from bot.helper.ext_utils.bot_utils import sync_to_async
 from ..base import BaseUpload
 from ..common import ProgressFileReader
 
 LOGGER = getLogger(__name__)
+
+_UPLOAD_TIMEOUT = ClientTimeout(total=None, sock_connect=30, sock_read=300)
 
 DEST_CONFIG = {
     "gdflix": ("GDFLIX_UPLOAD_URL", "GDFLIX_API_KEY", "GDFlix"),
@@ -58,6 +60,7 @@ class HttpApiUpload(BaseUpload):
             )
 
     async def _upload_one(self, file_path):
+        self.last_uploaded = 0
         name = ospath.basename(file_path)
         data = FormData()
         with ProgressFileReader(file_path, self._progress_callback) as fp:
@@ -68,7 +71,7 @@ class HttpApiUpload(BaseUpload):
                     self.token if self.token.lower().startswith(("bearer ", "basic "))
                     else f"Bearer {self.token}"
                 )
-            async with ClientSession() as session:
+            async with ClientSession(timeout=_UPLOAD_TIMEOUT) as session:
                 async with session.post(self.api_url, data=data, headers=headers) as resp:
                     body = await resp.text()
                     if resp.status >= 400:

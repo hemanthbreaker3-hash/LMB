@@ -59,6 +59,8 @@ class BaseUpload:
     def _progress_callback(self, current):
         if self._start_ts <= 0.0 and current > 0:
             self._start_ts = monotonic()
+        if current < self.last_uploaded:
+            self.last_uploaded = 0
         chunk = current - self.last_uploaded
         self.last_uploaded = current
         self._processed_bytes += chunk

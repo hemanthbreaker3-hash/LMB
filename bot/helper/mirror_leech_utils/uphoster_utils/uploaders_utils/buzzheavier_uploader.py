@@ -3,7 +3,9 @@ from os import path as ospath
 from os import walk as oswalk
 
 from aiofiles.os import path as aiopath
-from aiohttp import ClientSession
+from urllib.parse import quote
+
+from aiohttp import ClientSession, ClientTimeout
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -17,6 +19,8 @@ from ..base import BaseUpload
 from ..common import ProgressFileReader, extract_id
 
 LOGGER = getLogger(__name__)
+
+_UPLOAD_TIMEOUT = ClientTimeout(total=None, sock_connect=30, sock_read=300)
 
 
 class BuzzHeavierUpload(BaseUpload):
@@ -38,7 +42,7 @@ class BuzzHeavierUpload(BaseUpload):
         if not token:
             return False
         async with (
-            ClientSession() as session,
+            ClientSession(timeout=_UPLOAD_TIMEOUT) as session,
             session.get(
                 "https://buzzheavier.com/api/account",
                 headers={"Authorization": f"Bearer {token}"},
@@ -49,7 +53,7 @@ class BuzzHeavierUpload(BaseUpload):
     async def __get_root_id(self):
         if self.token is None:
             raise Exception("BuzzHeavier API token not found!")
-        async with ClientSession() as session:
+        async with ClientSession(timeout=_UPLOAD_TIMEOUT) as session:
             async with session.get(
                 f"{self.api_url}account",
                 headers={"Authorization": f"Bearer {self.token}"},
@@ -84,11 +88,12 @@ class BuzzHeavierUpload(BaseUpload):
         retry=retry_if_exception_type(Exception),
     )
     async def upload_aiohttp(self, url, file_path):
-        headers = {"Authorization": f"Bearer {self.token}"}
+        self.last_uploaded = 0
+        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         with ProgressFileReader(
             filename=file_path, read_callback=self._progress_callback
         ) as file:
-            async with ClientSession() as session:
+            async with ClientSession(timeout=_UPLOAD_TIMEOUT) as session:
                 async with session.put(url, data=file, headers=headers) as resp:
                     if resp.status in [200, 201]:
                         return extract_id(await resp.text())
@@ -104,7 +109,7 @@ class BuzzHeavierUpload(BaseUpload):
             if not parentFolderId:
                 raise Exception("Could not determine Root Directory ID.")
         url = f"{self.api_url}fs/{parentFolderId}"
-        async with ClientSession() as session:
+        async with ClientSession(timeout=_UPLOAD_TIMEOUT) as session:
             async with session.post(
                 url=url,
                 json={"name": folderName},
@@ -118,8 +123,8 @@ class BuzzHeavierUpload(BaseUpload):
     async def upload_file(self, path: str, parentId: str = ""):
         if self.listener.is_cancelled:
             return None
-        file_name = ospath.basename(path).replace(" ", ".")
-        if not parentId:
+        file_name = quote(ospath.basename(path), safe="")
+        if not parentId and self.token:
             parentId = await self.__get_root_id()
         if parentId:
             url = f"{self.upload_url}{parentId}/{file_name}"
@@ -167,12 +172,10 @@ class BuzzHeavierUpload(BaseUpload):
 
     async def _validate_token(self):
         if not self.token:
-            raise ValueError(
-                "BuzzHeavier API token not configured! Please set your BuzzHeavier token in user settings or configure a global token."
-            )
+            LOGGER.info("BuzzHeavier token not configured — using anonymous upload for single files.")
 
     async def _upload_process(self):
-        if not await self.is_buzzapi(self.token):
+        if self.token and not await self.is_buzzapi(self.token):
             raise Exception("Invalid BuzzHeavier API Key, please check your token!")
 
         if await aiopath.isfile(self._path):
@@ -190,6 +193,8 @@ class BuzzHeavierUpload(BaseUpload):
             else:
                 raise ValueError("Failed to upload file to BuzzHeavier")
         elif await aiopath.isdir(self._path):
+            if not self.token:
+                raise ValueError('BuzzHeavier API token is required for folder uploads.')
             folder_id = await self._upload_dir(self._path)
             if folder_id:
                 link = f"https://buzzheavier.com/{folder_id}"

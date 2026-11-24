@@ -202,7 +202,8 @@ def _update_packages():
     if srun(["which", "uv"], capture_output=True).returncode == 0:
         pip_cmd = "uv pip"
     scall(f"{pip_cmd} install -U -r requirements.txt", shell=True)
-    scall(f'{pip_cmd} install -U "wzgram[fast]"', shell=True)
+    scall(f'{pip_cmd} uninstall -y pyrogram kurigram pyrofork wzgram wzxpyro || true', shell=True)
+    scall(f'{pip_cmd} install -U "cbgram[fast]" cbcrypto', shell=True)
     scall(f"{pip_cmd} install --no-deps mega.py>=1.0.8", shell=True)
     _ensure_youtube_js_runtime()
     # One-time (per boot) yt-dlp nightly: YouTube breaks stable builds often

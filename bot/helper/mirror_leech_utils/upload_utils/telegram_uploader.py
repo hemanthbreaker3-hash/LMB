@@ -1,4 +1,4 @@
-from asyncio import Semaphore, ensure_future, gather, sleep, wait_for
+from asyncio import Lock, Semaphore, ensure_future, gather, sleep, wait_for
 from logging import getLogger
 from os import path as ospath, walk
 from re import match as re_match, sub as re_sub, I as re_I
@@ -75,6 +75,7 @@ class TelegramUploader:
         # Cache media-info (duration/quality/languages/subtitles) so split parts
         # of a merged file still get a full caption instead of empty languages.
         self._media_info_cache = {}
+        self._media_lock = Lock()
 
     async def _user_settings(self):
         settings_map = {
@@ -772,16 +773,13 @@ class TelegramUploader:
             LOGGER.debug(f"Media-info pre-cache skipped: {e}")
         upload_tasks = []
         seq_idx = 0
-        max_parallel = max(
-            2,
-            min(
-                4,
-                len(TgClient.helper_bots)
-                + len(TgClient.helper_users)
-                + (1 if TgClient.user else 0)
-                + 1,
-            ),
+        client_pool_size = (
+            len(TgClient.helper_bots)
+            + len(TgClient.helper_users)
+            + (1 if TgClient.user else 0)
+            + 1
         )
+        max_parallel = max(6, min(24, client_pool_size * 3))
         up_sem = Semaphore(max_parallel)
         anchor_msg = self._sent_msg
         for dirpath, _, files in natsorted(await sync_to_async(walk, self._path)):
@@ -956,17 +954,21 @@ class TelegramUploader:
                 key = "documents" if sent_msg.document else "videos"
                 if match := re_match(r".+(?=\.0*\d+$)|.+(?=\.part\d+\..+$)", o_path):
                     pname = match.group(0)
-                    if pname in self._media_dict[key].keys():
-                        self._media_dict[key][pname].append(
-                            [sent_msg.chat.id, sent_msg.id]
-                        )
-                    else:
-                        self._media_dict[key][pname] = [[sent_msg.chat.id, sent_msg.id]]
-                    msgs = self._media_dict[key][pname]
-                    if len(msgs) == 10:
-                        await self._send_media_group(pname, key, msgs)
-                    else:
-                        self._last_msg_in_group = True
+                    flush_msgs = None
+                    async with self._media_lock:
+                        if pname in self._media_dict[key]:
+                            self._media_dict[key][pname].append(
+                                [sent_msg.chat.id, sent_msg.id]
+                            )
+                        else:
+                            self._media_dict[key][pname] = [[sent_msg.chat.id, sent_msg.id]]
+                        msgs = self._media_dict[key][pname]
+                        if len(msgs) == 10:
+                            flush_msgs = list(msgs)
+                        else:
+                            self._last_msg_in_group = True
+                    if flush_msgs is not None:
+                        await self._send_media_group(pname, key, flush_msgs)
 
             return sent_msg
         except StopTransmission:

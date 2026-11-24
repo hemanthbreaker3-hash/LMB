@@ -1,4 +1,8 @@
 # ruff: noqa: E402
+import os as _os
+_os.environ.setdefault("CBGRAM_RUST_CORE", "1")
+_os.environ.setdefault("CBGRAM_UVLOOP", "1")
+
 try:
     from uvloop import install
 

@@ -69,11 +69,11 @@ commands = {
         ],
         r"([\d.]+)",
     ),
-    "wzgram": (
+    "cbgram": (
         [
             "python3",
             "-c",
-            "import importlib.metadata; print(importlib.metadata.version('wzgram'))",
+            "import importlib.metadata; print(importlib.metadata.version('cbgram'))",
         ],
         r"([\d.]+)",
     ),
@@ -212,7 +212,7 @@ async def get_stats(event, key="home"):
 • <b>FFmpeg:</b> v{get_v("ffmpeg", "9.0.2")}
 • <b>7-Zip:</b> v{get_v("7z", "26.03")}
 • <b>Aiohttp:</b> v{get_v("aiohttp", "3.14.3")}
-• <b>WzGram:</b> v{get_v("wzgram", "3.1.5")}
+• <b>CBGram:</b> v{get_v("cbgram", "1.0.0")}
 • <b>Google API:</b> v{get_v("gapi", "2.201.0")}
 • <b>MegaSDK:</b> v{get_v("mega", "10.20.0")}</blockquote>
 """

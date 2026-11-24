@@ -2,7 +2,7 @@
 
 ## Target throughput
 
-- **wzgram + MTProto + Hyper** path is always used when `USE_HYPER=True` (default).
+- **cbgram + MTProto + Hyper** path is always used when `USE_HYPER=True` (default).
 - Fast upload starts at **full concurrency** (no slow 10→50 Mbps ramp).
 - Design target on a good VPS/DC path: **~300 Mbps minimum class**, up to **~700 Mbps** when the network and Telegram DC allow it.
 - No library can guarantee a fixed Mbps; real speed still depends on VPS uplink, DC route, FloodWaits, and helper accounts.
@@ -15,8 +15,8 @@
 | Media sessions | **8** always (no size-based ramp) |
 | Workers per session | **6** (48 workers ceiling) |
 | Min file size for fast path | **1 MB** |
-| `max_concurrent_transmissions` | **16** (env `WZGRAM_MAX_CONCURRENT`) |
-| Override sessions | env `WZGRAM_FAST_UPLOAD_SESSIONS` (4–8) |
+| `max_concurrent_transmissions` | **16** (env `CBGRAM_MAX_CONCURRENT`) |
+| Override sessions | env `CBGRAM_RUST_CORE` (4–8) |
 
 ## Upload delivery path
 
@@ -33,9 +33,9 @@ Configure in bot settings (sudo):
 
 ## Dependencies
 
-- Linux: `wzgram[fast]>=3.1.5` (fast extra / uvloop where supported).
-- Windows: `wzgram>=3.1.5` without the Linux-only speed extra.
-- Do not mix `wzgram` and older `wzxpyro` in the same environment.
+- Linux: `cbgram[fast]>=3.1.5` (fast extra / uvloop where supported).
+- Windows: `cbgram>=3.1.5` without the Linux-only speed extra.
+- Do not mix `cbgram` and older `wzxpyro` in the same environment.
 
 ## Download speed (max from first part)
 

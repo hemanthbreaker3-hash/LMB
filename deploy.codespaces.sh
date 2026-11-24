@@ -22,7 +22,8 @@ mkdir -p logs downloads thumbnails tokens rclone cookies Images configs/sabnzbd
 [[ -x venv/bin/python ]] || python3 -m venv venv
 venv/bin/python -m pip install --upgrade pip setuptools wheel
 venv/bin/python -m pip install -r requirements.txt
-venv/bin/python -m pip install --upgrade "wzgram[fast]" imdbinfo pycountry aiofiles pyyaml
+venv/bin/python -m pip uninstall -y pyrogram kurigram pyrofork wzgram wzxpyro >/dev/null 2>&1 || true
+venv/bin/python -m pip install --upgrade "cbgram[fast]" cbcrypto imdbinfo pycountry aiofiles pyyaml
 venv/bin/python -m pip install --upgrade --pre 'yt-dlp[default,curl-cffi]' yt-dlp-ejs
 venv/bin/python -m py_compile config.py
 

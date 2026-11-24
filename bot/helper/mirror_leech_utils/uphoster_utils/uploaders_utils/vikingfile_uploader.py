@@ -3,7 +3,7 @@ from os import path as ospath
 from os import walk as oswalk
 
 from aiofiles.os import path as aiopath
-from aiohttp import ClientSession, FormData
+from aiohttp import ClientSession, ClientTimeout, FormData
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -20,6 +20,8 @@ from ..base import BaseUpload
 from ..common import ProgressFileReader
 
 LOGGER = getLogger(__name__)
+
+_UPLOAD_TIMEOUT = ClientTimeout(total=None, sock_connect=30, sock_read=300)
 
 
 class VikingFileUpload(BaseUpload):
@@ -42,7 +44,7 @@ class VikingFileUpload(BaseUpload):
     async def __get_server(self):
         if self._server:
             return self._server
-        async with ClientSession() as session:
+        async with ClientSession(timeout=_UPLOAD_TIMEOUT) as session:
             async with session.get(f"{self.base_url}/get-server") as resp:
                 res = await resp.json(content_type=None)
                 self._server = res.get("server", "https://upload.vikingfile.com")
@@ -57,6 +59,7 @@ class VikingFileUpload(BaseUpload):
         if self.listener.is_cancelled:
             return None
         server = await self.__get_server()
+        self.last_uploaded = 0
         file_name = ospath.basename(path)
         with ProgressFileReader(
             filename=path, read_callback=self._progress_callback
@@ -66,7 +69,7 @@ class VikingFileUpload(BaseUpload):
             data.add_field("user", self.token or "")
             if folder_path:
                 data.add_field("path", folder_path)
-            async with ClientSession() as session:
+            async with ClientSession(timeout=_UPLOAD_TIMEOUT) as session:
                 async with session.post(server, data=data) as resp:
                     res = await resp.json(content_type=None)
                     url = res.get("url")

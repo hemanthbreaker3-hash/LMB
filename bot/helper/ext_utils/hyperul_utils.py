@@ -69,7 +69,7 @@ class HypertgUpload(HypertgTransfer):
         if self._done_flag.get("ok"):
             return
         if self._listener.is_cancelled and StopTransmission is not None:
-            raise StopTransmission()  # only reliable way to abort wzgram transfer
+            raise StopTransmission()  # only reliable way to abort cbgram transfer
 
         from time import time as _wall_now
 
@@ -81,16 +81,16 @@ class HypertgUpload(HypertgTransfer):
         if not self._file_progress and current > 0:
             self._meter = {"t": monotonic(), "b": 0, "speed": 0.0}
 
-        # Speed smoothing (EMA: 0.7 * prev + 0.3 * instant)
+        # Immediate speed tracking from the first tick — no slow-start ramp
         now = monotonic()
         delta_t = now - self._meter["t"]
         delta_b = current - self._meter["b"]
-        if delta_t >= 0.25 and delta_b >= 0:
-            instant = delta_b / delta_t if delta_t > 0 else 0.0
+        if delta_t >= 0.05 and delta_b > 0:
+            instant = delta_b / delta_t
             self._meter["speed"] = (
                 instant
                 if not self._meter["speed"]
-                else (self._meter["speed"] * 0.7 + instant * 0.3)
+                else (self._meter["speed"] * 0.4 + instant * 0.6)
             )
             self._meter["t"], self._meter["b"] = now, current
             speed_map = getattr(self._obj, "_speed_map", None)
@@ -100,8 +100,8 @@ class HypertgUpload(HypertgTransfer):
             else:
                 self._obj._instant_speed = self._meter["speed"]
 
-        # Throttle UI/status updates to >= 0.3s intervals
-        if now - self._last_edit < 0.3 and total_bytes and current < total_bytes:
+        # Update processed bytes immediately on first tick or every >= 0.1s
+        if self._last_edit != 0.0 and (now - self._last_edit < 0.1) and total_bytes and current < total_bytes:
             return
         self._last_edit = now
 
@@ -296,7 +296,7 @@ class HypertgUpload(HypertgTransfer):
                         artist=artist,
                         title=title,
                         hd_cover=hd_cover,
-                        user_session=user_session or (up_size > 2097152000),
+                        user_session=user_session or (up_size > BOT_MAX_BYTES),
                     )
             else:
                 direct_rply = (
@@ -631,7 +631,7 @@ class HypertgUpload(HypertgTransfer):
                 kwargs["attributes"] = [DocumentAttributeFilename(file_name=send_name)]
 
         # If target is User PM and file > 2 GiB, stage via TgClient.user -> TgClient.bot bridge
-        if is_private_dm_target and up_size > 2097152000 and TgClient.user is not None:
+        if is_private_dm_target and up_size > BOT_MAX_BYTES and TgClient.user is not None:
             return await self._upload_via_bot_bridge(
                 key,
                 TgClient.user,
@@ -649,7 +649,7 @@ class HypertgUpload(HypertgTransfer):
                 LOGGER.warning(
                     f"User session direct upload to {chat_id} failed ({err}); falling back to bot delivery"
                 )
-                if up_size <= 2097152000:
+                if up_size <= BOT_MAX_BYTES:
                     try:
                         return await self._try_send(key, TgClient.bot, kwargs)
                     except Exception:

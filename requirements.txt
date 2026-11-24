@@ -26,7 +26,8 @@ psutil
 pycountry
 motor>=3.3.0
 pymongo
-wzgram[fast]>=3.1.5
+cbgram[fast]
+cbcrypto
 python-magic
 pytz
 pyyaml
