@@ -1149,7 +1149,7 @@ class TaskConfig:
 
             from pyrogram.handlers import MessageHandler
             from pyrogram.filters import create
-            from ...core.tg_client import TgClient
+            from ..core.tg_client import TgClient
 
             handler = TgClient.bot.add_handler(
                 MessageHandler(_multi_handler, filters=create(_multi_filter)), group=-2

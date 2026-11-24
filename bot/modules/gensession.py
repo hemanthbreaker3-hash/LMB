@@ -14,12 +14,12 @@ from pyrogram.errors import (
 from pyrogram.filters import create, private, text, user
 from pyrogram.handlers import CallbackQueryHandler, MessageHandler
 
-from ...core.config_manager import Config
-from ...core.tg_client import TgClient
-from ..ext_utils.bot_utils import new_task
-from ..ext_utils.status_utils import get_readable_time
-from ..telegram_helper.button_build import ButtonMaker
-from ..telegram_helper.message_utils import delete_message, edit_message, send_message
+from ..core.config_manager import Config
+from ..core.tg_client import TgClient
+from ..helper.ext_utils.bot_utils import new_task
+from ..helper.ext_utils.status_utils import get_readable_time
+from ..helper.telegram_helper.button_build import ButtonMaker
+from ..helper.telegram_helper.message_utils import delete_message, edit_message, send_message
 
 _STOP = "gensess_cmd_stop"
 _TIMEOUT = 180
