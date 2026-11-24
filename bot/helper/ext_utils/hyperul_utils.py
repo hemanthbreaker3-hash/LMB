@@ -104,8 +104,6 @@ class HypertgUpload(HypertgTransfer):
                 self._obj._instant_speed = self._meter["speed"]
 
         # Update processed bytes immediately on first tick or every >= 0.1s
-        if self._last_edit != 0.0 and (now - self._last_edit < 0.1) and total_bytes and current < total_bytes:
-            return
         self._last_edit = now
 
         self._file_progress[file_path] = current
@@ -164,7 +162,7 @@ class HypertgUpload(HypertgTransfer):
                             self._up_file or self._listener.name or file_path,
                             force_document or self._listener.as_doc,
                         ),
-                        timeout=1.5,
+                        timeout=8.0,
                     )
                     if thumb and await aiopath.isfile(thumb):
                         formatted = await sync_to_async(
@@ -344,7 +342,7 @@ class HypertgUpload(HypertgTransfer):
             raise
         finally:
             self._done_flag["ok"] = True
-            if user_thumb is None and thumb is not None and await aiopath.exists(thumb):
+            if user_thumb is None and thumb is not None and "thumbnails/" not in str(thumb) and await aiopath.exists(thumb):
                 try:
                     await remove(thumb)
                 except Exception:

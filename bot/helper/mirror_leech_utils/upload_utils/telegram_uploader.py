@@ -752,7 +752,7 @@ class TelegramUploader:
                         self._media_info_cache[family] = info
             elif await aiopath.isdir(self._path):
                 async def _cache_one(fp, f):
-                    info = await wait_for(get_media_info(fp, True), timeout=2.5)
+                    info = await wait_for(get_media_info(fp, True), timeout=4.0)
                     if info and (info[2] or info[3] if len(info) > 3 else False):
                         self._media_info_cache[ospath.abspath(fp)] = info
                         self._media_info_cache[f] = info
@@ -780,7 +780,7 @@ class TelegramUploader:
             + (1 if TgClient.user else 0)
             + 1
         )
-        max_parallel = max(12, min(48, client_pool_size * 6))
+        max_parallel = max(16, min(64, client_pool_size * 8))
         up_sem = Semaphore(max_parallel)
         anchor_msg = self._sent_msg
         for dirpath, _, files in natsorted(await sync_to_async(walk, self._path)):
