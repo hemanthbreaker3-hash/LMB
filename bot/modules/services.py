@@ -238,7 +238,7 @@ async def start(_, message):
             f"<b>🚀 Quick Start</b>\n"
             f"• Commands & guide: /{help_cmd}\n"
             f"• Select an authorized chat below to begin.\n\n"
-            f"<i>Powered by LMB & cbgram MTProto (cbcrypto Rust).</i>"
+            f"<i>Powered by LMB &amp; cbgram MTProto (cbcrypto Rust Engine).</i>"
         )
         await send_message(message, start_string, reply_markup, photo="IMAGES")
     elif Config.BOT_PM:

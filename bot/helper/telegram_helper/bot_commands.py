@@ -71,6 +71,7 @@ class BotCommands:
         "PremiumUsers": "premium_users",
         "RemovePremium": "removepremium",
         "Mention": "mention",
+        "GenSession": ["gensession", "gs"],
     }
 
     @classmethod

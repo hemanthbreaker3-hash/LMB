@@ -43,9 +43,11 @@ from ..ext_utils.bot_utils import SetInterval, download_image_url, fetch_drive_c
 from ..ext_utils.exceptions import TgLinkException
 from ..ext_utils.status_utils import get_readable_message
 from .button_build import ButtonMaker
+from .emoji_utils import apply_premium_emojis, strip_premium_emojis
 
 
 async def send_message(message, text, buttons=None, block=True, photo=None, **kwargs):
+    text = apply_premium_emojis(text) if isinstance(text, str) else apply_premium_emojis(str(text))
     img_photo = choice(Config.IMAGES) if (photo == "IMAGES" and Config.USE_IMAGES and Config.IMAGES) else (None if photo == "IMAGES" else photo)
     try:
         if img_photo:
@@ -137,6 +139,9 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
     except MessageTooLong:
         return await send_message(message, text[:4096], buttons, block, photo, **kwargs)
     except (MessageEmpty, EntityBoundsInvalid):
+        cleaned = strip_premium_emojis(text)
+        if cleaned != text:
+            return await send_message(message, cleaned, buttons, block, photo, **kwargs)
         return await send_message(message, text, buttons, block, photo, parse_mode=ParseMode.DISABLED, **kwargs)
     except PeerIdInvalid:
         LOGGER.warning(f"PeerIdInvalid when sending message to {message}")
@@ -149,6 +154,7 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
 
 
 async def edit_message(message, text, buttons=None, block=True, photo=None):
+    text = apply_premium_emojis(text) if isinstance(text, str) else apply_premium_emojis(str(text))
     img_photo = choice(Config.IMAGES) if (photo == "IMAGES" and Config.USE_IMAGES and Config.IMAGES) else (None if photo == "IMAGES" else photo)
     try:
         if not isinstance(text, str):
@@ -221,6 +227,7 @@ async def edit_reply_markup(message, buttons):
 
 
 async def send_file(message, file, caption="", buttons=None):
+    caption = apply_premium_emojis(caption) if caption else caption
     try:
         return await message.reply_document(
             document=file,
@@ -241,6 +248,7 @@ async def send_file(message, file, caption="", buttons=None):
 
 
 async def send_rss(text, chat_id, thread_id):
+    text = apply_premium_emojis(text) if isinstance(text, str) else text
     try:
         return await TgClient.bot.send_message(
             chat_id=chat_id,

@@ -162,7 +162,7 @@ class HypertgUpload(HypertgTransfer):
                             self._up_file or self._listener.name or file_path,
                             force_document or self._listener.as_doc,
                         ),
-                        timeout=3.0,
+                        timeout=1.5,
                     )
                     if thumb and await aiopath.isfile(thumb):
                         formatted = await sync_to_async(

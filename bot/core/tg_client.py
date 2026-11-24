@@ -249,6 +249,7 @@ class TgClient:
             "max_concurrent_transmissions": max(
                 1, int(os.environ.get("CBGRAM_MAX_CONCURRENT", "64"))
             ),
+            "workers": max(16, int(os.environ.get("CBGRAM_WORKERS", "32"))),
             "sleep_threshold": kwargs.get("sleep_threshold", 60),
             "skip_updates": False,
             "auto_no_updates": True,
@@ -509,6 +510,11 @@ class TgClient:
             await cls.bot.warm_fast_upload_sessions()
         except Exception:
             pass
+        try:
+            from ..helper.telegram_helper.emoji_utils import sync_bot_premium_emojis
+            await sync_bot_premium_emojis(cls.bot)
+        except Exception as exc:
+            LOGGER.debug("Premium emoji sync skipped: %s", exc)
         LOGGER.info(f"LMB Bot : [@{cls.BNAME}] Started!")
 
     @classmethod

@@ -152,6 +152,9 @@ class Config:
     LEECH_SPLIT_SIZE = BOT_MAX_BYTES
     MEDIA_GROUP = False
     USE_HYPER = True
+    USE_PREMIUM_EMOJIS = True
+    PREMIUM_EMOJI_PACK = ""
+    PREMIUM_EMOJIS = {}
     # 0 = auto (use full helper pool, high worker floor). Pipeline/chunk start at max.
     HYPER_THREADS = 0
     HYPER_PIPELINE = 128

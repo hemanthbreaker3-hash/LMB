@@ -79,6 +79,7 @@ from ..helper.ext_utils.track_manager import tm_callback
 __all__ = [
     "tm_callback",
     "mention_all",
+    "gen_session_cmd",
     "memory_stats",
     "memory_callback",
     "send_bot_settings",
@@ -182,3 +183,4 @@ __all__ = [
 ]
 
 from .mention import mention_all
+from .gensession import gen_session_cmd

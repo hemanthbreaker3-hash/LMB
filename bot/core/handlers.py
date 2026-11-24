@@ -38,6 +38,13 @@ async def add_handlers():
     )
     TgClient.bot.add_handler(
         MessageHandler(
+            gen_session_cmd,
+            filters=command(BotCommands.GenSessionCommand, case_sensitive=False)
+            & CustomFilters.sudo,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
             mention_all,
             filters=command(BotCommands.MentionCommand, case_sensitive=False)
             & CustomFilters.authorized,
