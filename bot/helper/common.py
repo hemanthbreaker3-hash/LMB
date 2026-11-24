@@ -925,28 +925,21 @@ class TaskConfig:
                         self.transmission_mode = "bot"
                     else:
                         try:
+                            await TgClient.ensure_peer(
+                                TgClient.user, self.up_dest, fallback_client=self.client
+                            )
                             chat = await TgClient.user.get_chat(self.up_dest)
                         except Exception:
                             chat = None
                         if chat is None:
                             self.transmission_mode = "bot"
-                        else:
-                            uploader_id = TgClient.user.me.id
-                            if chat.type not in [
-                                ChatType.SUPERGROUP,
-                                ChatType.CHANNEL,
-                                ChatType.GROUP,
-                                ChatType.FORUM,
-                            ]:
-                                self.transmission_mode = "bot"
-                            else:
-                                member = await chat.get_member(uploader_id)
-                                if (
-                                    not member.privileges
-                                    or not member.privileges.can_manage_chat
-                                    or not member.privileges.can_delete_messages
-                                ):
-                                    self.transmission_mode = "bot"
+                        elif chat.type not in [
+                            ChatType.SUPERGROUP,
+                            ChatType.CHANNEL,
+                            ChatType.GROUP,
+                            ChatType.FORUM,
+                        ]:
+                            self.transmission_mode = "bot"
 
                 try:
                     chat = await self.client.get_chat(self.up_dest)

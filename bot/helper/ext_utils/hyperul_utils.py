@@ -85,12 +85,13 @@ class HypertgUpload(HypertgTransfer):
         now = monotonic()
         delta_t = now - self._meter["t"]
         delta_b = current - self._meter["b"]
-        if delta_t >= 0.05 and delta_b > 0:
-            instant = delta_b / delta_t
+        if delta_b > 0 and (delta_t >= 0.05 or not self._meter["speed"]):
+            dt = max(delta_t, 0.01)
+            instant = delta_b / dt
             self._meter["speed"] = (
                 instant
                 if not self._meter["speed"]
-                else (self._meter["speed"] * 0.4 + instant * 0.6)
+                else (self._meter["speed"] * 0.35 + instant * 0.65)
             )
             self._meter["t"], self._meter["b"] = now, current
             speed_map = getattr(self._obj, "_speed_map", None)
@@ -239,19 +240,29 @@ class HypertgUpload(HypertgTransfer):
         )
 
         _, part_needs_user = await self._get_upload_client_for_part(file_path)
-        use_hyper = bool(
-            getattr(Config, 'USE_HYPER', True)
-            and self.num_clients > 0
-            and not is_private_dm_target
-            and not part_needs_user
-        )
-        if part_needs_user:
-            user_session = True
-        elif self._listener.transmission_mode == "user" and TgClient.user is not None and not is_private_dm_target:
-            user_session = True
-        else:
-            # Prefer bot client when part <= BOT_MAX_BYTES
+        # Primary upload to leech_chat / leech_dump_chats must use USER_SESSION_STRING
+        # whenever configured; Private PM delivery always uses bot session only.
+        if is_private_dm_target:
             user_session = False
+            use_hyper = False
+            hyper_user_only = False
+        elif TgClient.user is not None and (
+            part_needs_user
+            or self._listener.transmission_mode in ("user", "both")
+            or bool(Config.LEECH_LOG_CHAT)
+            or bool(getattr(self._listener, "leech_dests", None))
+        ):
+            user_session = True
+            has_user_helpers = bool(TgClient.helper_users)
+            use_hyper = bool(getattr(Config, "USE_HYPER", True) and has_user_helpers)
+            hyper_user_only = True
+        else:
+            user_session = False
+            use_hyper = bool(
+                getattr(Config, "USE_HYPER", True)
+                and self.num_clients > 0
+                and not part_needs_user
+            )
 
         self._done_flag = {"ok": False}
         self._meter = {"t": monotonic(), "b": 0, "speed": 0.0}

@@ -31,7 +31,7 @@ except OSError:
 # CBGRAM_UVLOOP=1 enables uvloop on Linux and macOS.
 os.environ.setdefault("CBGRAM_RUST_CORE", "1")
 os.environ.setdefault("CBGRAM_UVLOOP", "1")
-os.environ.setdefault("CBGRAM_MAX_CONCURRENT", "32")
+os.environ.setdefault("CBGRAM_MAX_CONCURRENT", "64")
 
 _DB_PARTITION_SALT = b"wzmlx_v3_db_partition_salt"
 
@@ -228,7 +228,7 @@ class TgClient:
             "(cbcrypto Rust core=%s, uvloop=%s, max_concurrent=%s)",
             os.environ.get("CBGRAM_RUST_CORE", "1"),
             os.environ.get("CBGRAM_UVLOOP", "1"),
-            os.environ.get("CBGRAM_MAX_CONCURRENT", "32"),
+            os.environ.get("CBGRAM_MAX_CONCURRENT", "64"),
         )
         return client
 
@@ -247,7 +247,7 @@ class TgClient:
         # High concurrency for simultaneous and bulk tasks via cbgram + cbcrypto Rust core.
         for param, value in {
             "max_concurrent_transmissions": max(
-                1, int(os.environ.get("CBGRAM_MAX_CONCURRENT", "32"))
+                1, int(os.environ.get("CBGRAM_MAX_CONCURRENT", "64"))
             ),
             "sleep_threshold": kwargs.get("sleep_threshold", 60),
             "skip_updates": False,

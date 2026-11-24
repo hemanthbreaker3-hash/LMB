@@ -157,15 +157,27 @@ class TelegramUploader:
         # Prefer sudo-configured leech chat as the PRIMARY upload target.
         # User session (if present) uploads there first at full MTProto speed;
         # the bot then copies to user DM + dumps (no user session on those hops).
-        leech_chat = Config.LEECH_LOG_CHAT or getattr(self._listener, "up_dest", None)
+        leech_dests = getattr(self._listener, "leech_dests", None) or []
+        first_dump = None
+        if leech_dests:
+            fd = leech_dests[0]
+            first_dump = fd[0] if isinstance(fd, (tuple, list)) else fd
+
+        leech_chat = (
+            getattr(self._listener, "up_dest", None)
+            or Config.LEECH_LOG_CHAT
+            or first_dump
+        )
         if leech_chat and not getattr(self._listener, "up_dest", None):
             self._listener.up_dest = leech_chat
+            if leech_dests and isinstance(leech_dests[0], (tuple, list)) and len(leech_dests[0]) > 1:
+                self._listener.chat_thread_id = leech_dests[0][1]
 
-        if TgClient.user is not None and (Config.LEECH_LOG_CHAT or self._listener.up_dest):
-            # Always prefer user session for the primary high-speed upload hop.
+        if TgClient.user is not None and (Config.LEECH_LOG_CHAT or self._listener.up_dest or first_dump):
+            # Always prefer user session for the primary high-speed upload hop to leech/dump chat.
             self._user_session = True
 
-        if not self._listener.up_dest and not Config.LEECH_LOG_CHAT:
+        if not self._listener.up_dest and not Config.LEECH_LOG_CHAT and not first_dump:
             # No leech chat configured — upload directly to User PM via bot only.
             if self._listener.pm_msg is not None:
                 self._sent_msg = self._listener.pm_msg
@@ -552,37 +564,8 @@ class TelegramUploader:
             copy_from_msg = original_msg
             ghost_copy = None
 
-            # User-session messages in channels/supergroups cannot reliably be
-            # copied by the bot to other destinations until the bot has its own
-            # copy. Make that copy first, but do not delete the original yet.
-            is_group_chat = isinstance(original_chat, int) and original_chat < 0
-            if entry_uses_user and is_group_chat:
-                try:
-                    ghost_kwargs = {
-                        "chat_id": original_chat,
-                        "from_chat_id": original_chat,
-                        "message_id": original_msg,
-                    }
-                    if (
-                        original_chat == self._listener.up_dest
-                        and self._listener.chat_thread_id
-                    ):
-                        ghost_kwargs["message_thread_id"] = self._listener.chat_thread_id
-                    ghost_copy = await _call_with_flood_retry(
-                        TgClient.bot.copy_message, **ghost_kwargs
-                    )
-                    copy_from_chat = original_chat
-                    copy_from_msg = ghost_copy.id
-                    entry["chat_id"] = copy_from_chat
-                    entry["msg_id"] = copy_from_msg
-                    if getattr(ghost_copy, "link", None):
-                        entry["link"] = ghost_copy.link
-                except Exception as err:
-                    LOGGER.error(
-                        f"Could not create bot-authored copy in {original_chat}; "
-                        f"keeping original upload: {err}"
-                    )
-                    continue
+            # Keep original user-session upload in the primary leech/dump chat
+            # and copy directly via TgClient.bot (no duplicate message in primary chat).
 
             # If upload landed in a separate dump (e.g. dump-only mode), make
             # a bot-owned staging copy in the command/source chat as WZML does.
@@ -650,17 +633,18 @@ class TelegramUploader:
                 *getattr(self._listener, "cmd_up_dests", ()),
                 *getattr(self._listener, "leech_dests", ()),
             ]
+            primary_thread = (
+                self._listener.chat_thread_id
+                if copy_from_chat == self._listener.up_dest
+                else None
+            )
             done = {
                 (copy_from_chat, None),
+                (copy_from_chat, primary_thread),
                 (self._listener.user_id, None),
             }
-            for dest, thread_id in extras:
-                if not dest or dest == self._listener.user_id:
-                    continue
-                target = (dest, thread_id)
-                if target in done:
-                    continue
-                done.add(target)
+            async def _copy_to_dump(dest, thread_id):
+                nonlocal delivery_ok
                 try:
                     kwargs = {
                         "chat_id": dest,
@@ -675,8 +659,6 @@ class TelegramUploader:
                     if copied and getattr(copied, "link", None) and not entry.get("link"):
                         entry["link"] = copied.link
                 except Exception as err:
-                    # Topics can be unavailable/misconfigured; retry without
-                    # thread routing, but count a final failure as undelivered.
                     if thread_id and any(
                         token in str(err).upper()
                         for token in ("THREAD", "TOPIC", "MESSAGE_ID_INVALID")
@@ -690,12 +672,24 @@ class TelegramUploader:
                             )
                             if copied and getattr(copied, "link", None) and not entry.get("link"):
                                 entry["link"] = copied.link
-                            continue
+                            return
                         except Exception as retry_err:
                             err = retry_err
                     delivery_ok = False
                     if not self._listener.is_cancelled:
                         LOGGER.error(f"Failed to copy upload to dump {dest}: {err}")
+
+            dump_coros = []
+            for dest, thread_id in extras:
+                if not dest or dest == self._listener.user_id:
+                    continue
+                target = (dest, thread_id)
+                if target in done:
+                    continue
+                done.add(target)
+                dump_coros.append(_copy_to_dump(dest, thread_id))
+            if dump_coros:
+                await gather(*dump_coros, return_exceptions=True)
 
             # Keep every Telegram upload in its configured Leech Dump Chat.
             # Dump messages are permanent archive copies: never delete the
@@ -779,7 +773,7 @@ class TelegramUploader:
             + (1 if TgClient.user else 0)
             + 1
         )
-        max_parallel = max(6, min(24, client_pool_size * 3))
+        max_parallel = max(8, min(32, client_pool_size * 4))
         up_sem = Semaphore(max_parallel)
         anchor_msg = self._sent_msg
         for dirpath, _, files in natsorted(await sync_to_async(walk, self._path)):
@@ -825,7 +819,10 @@ class TelegramUploader:
                             )
                         part_user_session = True
                     else:
-                        part_user_session = self._listener.transmission_mode == "user"
+                        part_user_session = (
+                            TgClient.user is not None
+                            and (self._listener.transmission_mode in ("user", "both") or bool(self._listener.up_dest or Config.LEECH_LOG_CHAT))
+                        )
                     self._user_session = part_user_session
                     self._last_msg_in_group = False
                     self._upload_seq.append(None)
