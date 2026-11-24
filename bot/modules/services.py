@@ -49,10 +49,10 @@ async def _build_start_buttons():
     # variables. These values are also persisted by deploy.vps for systemd.
     repo_url = getenv("START_REPO_URL", "https://github.com/abhinai2244/CBML").strip()
     repo_label = getenv("START_REPO_BUTTON", lang.START_BUTTON1).strip() or lang.START_BUTTON1
-    updates_url = getenv("START_UPDATE_URL", "https://t.me/cantarellabots").strip()
+    updates_url = getenv("START_UPDATE_URL", "").strip()
     updates_label = getenv("START_UPDATE_BUTTON", lang.START_BUTTON2).strip() or lang.START_BUTTON2
-    dev_url = getenv("START_DEV_URL", "https://t.me/cantarella_wuwa").strip()
-    dev_label = getenv("START_DEV_BUTTON", "TENKA IZUMO").strip() or "TENKA IZUMO"
+    dev_url = getenv("START_DEV_URL", "").strip()
+    dev_label = getenv("START_DEV_BUTTON", "LMB").strip() or "LMB"
 
     if repo_url:
         buttons.url_button(repo_label, repo_url, "header")

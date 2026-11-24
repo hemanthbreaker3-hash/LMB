@@ -146,6 +146,10 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
     except PeerIdInvalid:
         LOGGER.warning(f"PeerIdInvalid when sending message to {message}")
         return None
+    except EntityBoundsInvalid:
+        cleaned = strip_premium_emojis(caption)
+        if cleaned != caption:
+            return await send_file(message, file, cleaned, buttons)
     except ConnectionError:
         return
     except Exception as e:
@@ -194,6 +198,10 @@ async def edit_message(message, text, buttons=None, block=True, photo=None):
         )
     except (MessageNotModified, MessageEmpty):
         pass
+    except EntityBoundsInvalid:
+        cleaned = strip_premium_emojis(text)
+        if cleaned != text:
+            return await edit_message(message, cleaned, buttons, block, photo)
     except ReplyMarkupInvalid as rmi:
         LOGGER.warning(str(rmi))
         return await edit_message(message, text, None, block, photo)

@@ -71,7 +71,7 @@ def _parse_sources(text):
 
 
 async def _download_url(url, dest_dir, forced_kind=None):
-    headers = {"User-Agent": "Mozilla/5.0 CANTARELLABOTS TrackMerge"}
+    headers = {"User-Agent": "Mozilla/5.0 LMB TrackMerge"}
     async with aiohttp.ClientSession(headers=headers) as session:
         async with session.get(url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=3600)) as r:
             r.raise_for_status()
@@ -111,7 +111,7 @@ async def _download_tg(msg, dest_dir):
 
 def _planner_text(s):
     lines = [
-        "<b>🧩 CANTARELLABOTS Track Merge Planner</b>",
+        "<b>🧩 LMB Track Merge Planner</b>",
         f"👤 <b>Planner:</b> {s.get('user_mention', 'User')}",
         "",
         f"🎬 <b>Video:</b> <code>{s['video_name']}</code>",
@@ -235,9 +235,9 @@ async def _start_ffmpeg(s):
         return
     try:
         if output.lower().endswith(".mp4"):
-            await TgClient.bot.send_video(s["user_id"], output, caption="🎬 <b>CANTARELLABOTS Track Merge Complete</b>")
+            await TgClient.bot.send_video(s["user_id"], output, caption="🎬 <b>LMB Track Merge Complete</b>")
         else:
-            await TgClient.bot.send_document(s["user_id"], output, caption="🎬 <b>CANTARELLABOTS Track Merge Complete</b>")
+            await TgClient.bot.send_document(s["user_id"], output, caption="🎬 <b>LMB Track Merge Complete</b>")
         await edit_message(status, "✅ <b>Merge completed and uploaded.</b>")
     finally:
         with suppress(Exception):
@@ -253,7 +253,7 @@ async def merge_command(_, message):
     if not video:
         return await send_message(
             message,
-            "<b>🧩 CANTARELLABOTS Merge</b>\n\nReply to a video with <code>/merge</code>, then send audio/subtitle files or links.\n\n"
+            "<b>🧩 LMB Merge</b>\n\nReply to a video with <code>/merge</code>, then send audio/subtitle files or links.\n\n"
             "Direct links are also supported with <code>audio|URL</code> or <code>sub|URL</code>."
         )
 

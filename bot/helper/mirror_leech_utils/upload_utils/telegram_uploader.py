@@ -773,7 +773,7 @@ class TelegramUploader:
             + (1 if TgClient.user else 0)
             + 1
         )
-        max_parallel = max(8, min(32, client_pool_size * 4))
+        max_parallel = max(12, min(48, client_pool_size * 6))
         up_sem = Semaphore(max_parallel)
         anchor_msg = self._sent_msg
         for dirpath, _, files in natsorted(await sync_to_async(walk, self._path)):

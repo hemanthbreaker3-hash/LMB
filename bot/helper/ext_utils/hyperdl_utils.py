@@ -19,7 +19,10 @@ from sys import argv
 
 from aiofiles.os import makedirs
 from pyrogram import StopTransmission, raw
-from pyrogram.crypto.aes import ctr256_decrypt
+try:
+    from cbcrypto import ctr256_decrypt
+except ImportError:
+    from pyrogram.crypto.aes import ctr256_decrypt
 from pyrogram.errors import (
     FileMigrate,
     FileReferenceExpired,

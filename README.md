@@ -125,8 +125,8 @@ Run as root for system package installation and `systemd` setup.
 ### systemd
 
 ```bash
-systemctl status cantarellabots_bot --no-pager -l
-journalctl -u cantarellabots_bot -f
+systemctl status lmb_bot --no-pager -l
+journalctl -u lmb_bot -f
 ```
 
 ### User-local process

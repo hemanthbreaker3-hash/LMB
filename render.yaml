@@ -1,7 +1,7 @@
 # Render runs the Telegram bot as a background worker. The website is deployed separately from /vercel.
 services:
   - type: worker
-    name: cantarellabots-bot
+    name: lmb-bot
     runtime: python
     plan: starter
     buildCommand: pip install -r requirements.txt

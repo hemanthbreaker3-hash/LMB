@@ -341,8 +341,8 @@ async def gen_pyro_string(_, message):
             "me",
             f"⌬ <b><u>CBGram Session Generated</u></b>\n\n"
             f"<code>{session_string}</code>\n\n"
-            f"<b>CBGram v{cbgram_version} | CANTARELLABOTS {get_version()}</b>\n"
-            f"<b>CANTARELLABOTS</b>",
+            f"<b>CBGram v{cbgram_version} | LMB {get_version()}</b>\n"
+            f"<b>LMB</b>",
             disable_web_page_preview=True,
         )
         await _safe_disconnect(pyro_client)

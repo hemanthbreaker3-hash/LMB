@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-SERVICE_NAME="cantarellabots_bot"
+SERVICE_NAME="lmb_bot"
 POT_SERVICE_NAME="bgutil-ytdlp-pot-provider"
 APP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 export DEBIAN_FRONTEND=noninteractive
@@ -138,7 +138,7 @@ fi
 
 trap 'rc=$?; if [[ $rc -ne 0 ]]; then echo "Deployment failed (exit $rc). Logs: journalctl -u ${SERVICE_NAME} -n 100 --no-pager" >&2; fi' EXIT
 
-echo "=== CANTARELLABOTS VPS deployment (BOT_TOKEN environment mode) ==="
+echo "=== LMB VPS deployment (BOT_TOKEN environment mode) ==="
 # Fail early on syntax errors before expensive dependency installation.
 python3 - <<'PY_SYNTAX_PREFLIGHT'
 from pathlib import Path
@@ -374,7 +374,7 @@ PY_PROGRESS_PREFLIGHT
 # Persist every config.py variable for systemd. The app's ConfigManager converts
 # environment strings back to the expected bool/int/list/dict types. Caller
 # exports override config.py values. Keep secrets in a root-only environment file.
-install -m 600 /dev/null /etc/cantarellabots_bot.env
+install -m 600 /dev/null /etc/lmb_bot.env
 python3 - <<'PY_WRITE_ENV'
 import os, runpy
 from pathlib import Path
@@ -407,17 +407,17 @@ lines = [f"{key}={systemd_quote(env_value(key, namespace.get(key, "")))}" for ke
 # BOT_TOKEN is guaranteed above; include it explicitly if config.py omitted it.
 if "BOT_TOKEN" not in keys:
     lines.append(f"BOT_TOKEN={systemd_quote(os.environ['BOT_TOKEN'])}")
-Path("/etc/cantarellabots_bot.env").write_text("\n".join(lines) + "\n", encoding="utf-8")
-os.chmod("/etc/cantarellabots_bot.env", 0o600)
+Path("/etc/lmb_bot.env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+os.chmod("/etc/lmb_bot.env", 0o600)
 print(f"Persisted {len(lines)} configuration environment variables (values hidden).")
 PY_WRITE_ENV
-chmod 600 /etc/cantarellabots_bot.env
+chmod 600 /etc/lmb_bot.env
 
 # Start bot directly. Do not run update.py automatically: it can reset files to UPSTREAM_REPO.
 echo "[4/6] Writing systemd service..."
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
-Description=CANTARELLABOTS Mirror Leech Bot Service
+Description=LMB Mirror Leech Bot Service
 Wants=network-online.target
 Requires=${POT_SERVICE_NAME}.service
 After=network-online.target ${POT_SERVICE_NAME}.service
@@ -431,7 +431,7 @@ WorkingDirectory=$APP_DIR
 ExecStart=/usr/bin/env bash $APP_DIR/start.sh
 Restart=on-failure
 RestartSec=8
-EnvironmentFile=/etc/cantarellabots_bot.env
+EnvironmentFile=/etc/lmb_bot.env
 Environment="PATH=$APP_DIR/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="PYTHONUNBUFFERED=1"
 

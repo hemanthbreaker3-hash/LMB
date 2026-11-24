@@ -17,7 +17,7 @@ def setting(name, default):
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         data = {
-            "site_name": setting("SITE_NAME", "CANTARELLABOTS"),
+            "site_name": setting("SITE_NAME", "LMB"),
             "site_tagline": setting("SITE_TAGLINE", "Your media hub, beautifully organized."),
         }
         body = json.dumps(data).encode()
