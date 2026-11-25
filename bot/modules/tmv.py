@@ -1,0 +1,1189 @@
+from asyncio import (
+    Event,
+    TimeoutError as AsyncTimeout,
+    sleep,
+    to_thread,
+    wait_for,
+)
+from contextlib import suppress
+from html import escape
+from os import makedirs, path as ospath
+import re
+from secrets import token_hex
+from time import time
+from urllib.parse import urljoin, urlparse
+
+from bs4 import BeautifulSoup
+import cloudscraper
+import requests
+
+from pyrogram.enums import ButtonStyle, ChatType
+from pyrogram.filters import create, private, text, user
+from pyrogram.handlers import CallbackQueryHandler, MessageHandler
+from pyrogram.types import Message
+
+from .. import LOGGER, bot_loop, user_data
+from ..core.config_manager import Config
+from ..core.tg_client import TgClient
+from ..helper.ext_utils.bot_utils import new_task
+from ..helper.ext_utils.db_handler import database
+from ..helper.ext_utils.status_utils import get_readable_time
+from ..helper.telegram_helper.bot_commands import BotCommands
+from ..helper.telegram_helper.button_build import ButtonMaker
+from ..helper.telegram_helper.message_utils import delete_message, edit_message, send_message
+
+GATEWAY_DOMAINS = [
+    "https://www.1tamilmv.fi",
+    "https://1tamilmv.fi",
+    "https://www.1tamilmv.ceo",
+]
+DEFAULT_BASE_URL = "https://www.1tamilmv.ceo"
+DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+BAD_IMG_WORDS = (
+    "smilies",
+    "border",
+    "utorrent",
+    "torrborder",
+    "default_large",
+    "theme",
+    "icon",
+    "blank.gif",
+)
+
+_MONITOR_TASKS: dict[int, object] = {}
+_DEAD_TOPICS: set[str] = set()
+_TOPIC_PICKERS: dict[str, dict] = {}
+_INPUT_WAIT_TIMEOUT = 120
+
+
+def _default_tmv_settings() -> dict:
+    return {
+        "enabled": False,
+        "paused": False,
+        "domain": "",
+        "active_domain": DEFAULT_BASE_URL,
+        "settings_mode": "user",  # "user" | "independent"
+        "interval": 360,
+        "download_mode": "all",  # "all" | "magnet" | "direct" | "torrent"
+        "independent": {
+            "UPLOAD_DEST": "telegram",  # "telegram" | "mirror" | "uphoster" | custom -up
+            "LEECH_DUMP_CHAT": "",
+            "AS_DOCUMENT": False,
+            "AUTO_THUMBNAIL": True,
+            "THUMBNAIL_MODE": "auto",
+            "LEECH_PREFIX": "",
+            "LEECH_SUFFIX": "",
+            "LEECH_CAPTION": "",
+            "LEECH_FONT": "none",
+        },
+        "seen_links": [],
+        "seen_topics": [],
+    }
+
+
+def _get_tmv_cfg(uid: int) -> dict:
+    ud = user_data.setdefault(uid, {})
+    cfg = ud.get("TMV_SETTINGS")
+    if not isinstance(cfg, dict):
+        cfg = _default_tmv_settings()
+        ud["TMV_SETTINGS"] = cfg
+    defaults = _default_tmv_settings()
+    for k, v in defaults.items():
+        if k not in cfg:
+            cfg[k] = v if not isinstance(v, (dict, list)) else (dict(v) if isinstance(v, dict) else list(v))
+    if not isinstance(cfg.get("independent"), dict):
+        cfg["independent"] = dict(defaults["independent"])
+    else:
+        for ik, iv in defaults["independent"].items():
+            cfg["independent"].setdefault(ik, iv)
+    if not isinstance(cfg.get("seen_links"), list):
+        cfg["seen_links"] = []
+    if not isinstance(cfg.get("seen_topics"), list):
+        cfg["seen_topics"] = []
+    return cfg
+
+
+async def _save_tmv_cfg(uid: int):
+    if Config.DATABASE_URL:
+        with suppress(Exception):
+            await database.update_user_data(uid)
+
+
+def _create_scraper():
+    try:
+        return cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "mobile": False}
+        )
+    except Exception:
+        s = requests.Session()
+        s.headers.update(DEFAULT_HEADERS)
+        return s
+
+
+def _norm(url: str) -> str:
+    if not url:
+        return url
+    p = urlparse(url)
+    path = p.path.rstrip("/")
+    query = p.query.rstrip("/")
+    return (path or "/") + (f"?{query}" if query else "")
+
+
+def _topic_id(url: str) -> str:
+    if not url:
+        return ""
+    m = re.search(r"/topic/(\d+)", url)
+    return f"topic_id:{m.group(1)}" if m else ""
+
+
+def _extract_size(text_val: str) -> str:
+    m = re.search(r"(\d+(?:\.\d+)?\s*(?:GB|MB|KB))", text_val, re.IGNORECASE)
+    return m.group(1) if m else "Unknown"
+
+
+def _clean_release_title(raw_title: str) -> str:
+    title = re.sub(r"^www\.\S+\s*-\s*", "", raw_title.strip(), flags=re.IGNORECASE).strip()
+    if title.lower().endswith(".torrent"):
+        title = title[:-8].strip()
+    if title.lower().endswith(".mkv"):
+        title = title[:-4].strip()
+    return re.sub(r"\s+", " ", title).strip() or "1TamilMV Release"
+
+
+def _parse_domains_list(raw_domains: str) -> list[str]:
+    if not raw_domains:
+        return []
+    out = []
+    for part in str(raw_domains).split(","):
+        dom = part.strip().rstrip("/")
+        if not dom:
+            continue
+        if not dom.startswith(("http://", "https://")):
+            dom = f"https://{dom}"
+        if dom not in out:
+            out.append(dom)
+    return out
+
+
+def discover_active_domain_sync(custom_domain: str = "") -> str:
+    domains = _parse_domains_list(custom_domain)
+    if domains:
+        scraper = _create_scraper()
+        for dom in domains:
+            try:
+                r = scraper.get(f"{dom}/index.php?/forums/topic/", timeout=10, allow_redirects=True)
+                if r.status_code == 200:
+                    return dom
+            except Exception:
+                pass
+        return domains[0]
+
+    scraper = _create_scraper()
+    for gateway in ("https://www.1tamilmv.fi", "https://1tamilmv.fi"):
+        try:
+            r = scraper.get(gateway, timeout=8, allow_redirects=False)
+            if r.status_code in (301, 302, 307, 308) and r.headers.get("Location"):
+                p = urlparse(r.headers["Location"])
+                final = f"{p.scheme}://{p.netloc}".rstrip("/")
+                if "tamilmv" in final.lower():
+                    return final
+        except Exception:
+            pass
+
+    for domain in GATEWAY_DOMAINS:
+        try:
+            r = scraper.get(domain, timeout=10, allow_redirects=True)
+            if r.status_code == 200:
+                m = re.search(
+                    r"official\s+website\s+(WWW\.[A-Z0-9.-]+)", r.text, re.IGNORECASE
+                )
+                if m:
+                    return f"https://{m.group(1).lower()}".rstrip("/")
+                p = urlparse(r.url)
+                return f"{p.scheme}://{p.netloc}".rstrip("/")
+        except Exception:
+            pass
+
+    return DEFAULT_BASE_URL
+
+
+def _parse_topic_sync(scraper, topic_url: str, forum_url: str = ""):
+    if _norm(topic_url) in _DEAD_TOPICS:
+        return None
+    if not forum_url:
+        p = urlparse(topic_url)
+        forum_url = f"{p.scheme}://{p.netloc}/index.php?/forums/topic/"
+    r = scraper.get(topic_url, timeout=20, headers={"Referer": forum_url})
+    if r.status_code in (404, 410):
+        _DEAD_TOPICS.add(_norm(topic_url))
+        return None
+    r.raise_for_status()
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    post = (
+        soup.find("div", attrs={"data-role": "commentContent"})
+        or soup.find("div", class_="cPost_contentWrap")
+    )
+    if not post:
+        return None
+
+    poster_url = None
+    for img in post.find_all("img"):
+        src = img.get("src") or img.get("data-src")
+        if not src or any(bad in src.lower() for bad in BAD_IMG_WORDS):
+            continue
+        poster_url = urljoin(topic_url, src)
+        break
+
+    releases = []
+    current = None
+    for a in post.find_all("a"):
+        href = (a.get("href") or "").strip()
+        href_lower = href.lower()
+        fileext = a.get("data-fileext")
+        raw_text = a.get_text(" ", strip=True)
+
+        is_torrent = (
+            (fileext and fileext.lower() == "torrent")
+            or ("attachment.php" in href_lower and "key=" in href_lower)
+            or href_lower.endswith(".torrent")
+        )
+        if is_torrent:
+            current = {
+                "title": _clean_release_title(raw_text),
+                "torrent_link": urljoin(topic_url, href),
+                "size": _extract_size(raw_text),
+                "direct_link": None,
+                "magnet": None,
+            }
+            releases.append(current)
+        elif current:
+            classes = [c.lower() for c in a.get("class", [])]
+            is_direct = (
+                "DIRECT" in raw_text.upper()
+                or "cyberloom" in href_lower
+                or any("download" in c for c in classes)
+            )
+            if href_lower.startswith("magnet:"):
+                if not current["magnet"]:
+                    current["magnet"] = href
+            elif is_direct and href.startswith("http") and not current["direct_link"]:
+                current["direct_link"] = href
+
+    if not releases:
+        return None
+
+    title_tag = soup.find("h1") or soup.find("title")
+    topic_title = (
+        _clean_release_title(title_tag.get_text()) if title_tag else releases[0]["title"]
+    )
+    return {
+        "topic_url": topic_url,
+        "title": topic_title,
+        "poster_url": poster_url,
+        "releases": releases,
+    }
+
+
+def crawl_tbl_sync(base_domains: str, max_topics: int = 15):
+    scraper = _create_scraper()
+    candidates = _parse_domains_list(base_domains)
+    resp = None
+    active_base = ""
+
+    for dom in candidates:
+        try:
+            forum_url = f"{dom}/index.php?/forums/topic/"
+            r = scraper.get(forum_url, timeout=20, headers={"Referer": dom})
+            r.raise_for_status()
+            resp = r
+            active_base = dom
+            break
+        except Exception:
+            continue
+
+    if resp is None:
+        active_base = discover_active_domain_sync()
+        forum_url = f"{active_base}/index.php?/forums/topic/"
+        resp = scraper.get(forum_url, timeout=20, headers={"Referer": active_base})
+        resp.raise_for_status()
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    recently_added_links, other_banger_links, general_links = [], [], []
+
+    for b in soup.find_all("div", class_="banger-container"):
+        header = b.find("div", class_="banger-header")
+        header_text = header.get_text() if header else b.get_text()
+        is_recent = "RECENTLY ADDED" in header_text.upper()
+        for a in b.find_all("a", href=True):
+            href = a.get("href", "").strip()
+            if re.search(r"index\.php\?/forums/topic/", href, re.IGNORECASE) and not href.endswith("-0/"):
+                full_url = urljoin(active_base, href)
+                (recently_added_links if is_recent else other_banger_links).append(full_url)
+
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "").strip()
+        if re.search(r"index\.php\?/forums/topic/", href, re.IGNORECASE) and not href.endswith("-0/"):
+            general_links.append(urljoin(active_base, href))
+
+    def _dedupe(urls):
+        seen, out = set(), []
+        for u in urls:
+            k = _topic_id(u) or _norm(u)
+            if k not in seen:
+                seen.add(k)
+                out.append(u)
+        return out
+
+    top_links = _dedupe(other_banger_links)
+    rest_links = _dedupe(recently_added_links + general_links)
+    top_keys = {_topic_id(u) or _norm(u) for u in top_links}
+    rest_links = [u for u in rest_links if (_topic_id(u) or _norm(u)) not in top_keys]
+    topic_links = top_links + rest_links
+    scan_limit = len(top_links) + max_topics
+
+    topics = []
+    for topic_url in topic_links[:scan_limit]:
+        if _norm(topic_url) in _DEAD_TOPICS:
+            continue
+        try:
+            topic = _parse_topic_sync(scraper, topic_url, f"{active_base}/index.php?/forums/topic/")
+            if topic:
+                topics.append(topic)
+        except Exception as exc:
+            LOGGER.debug("TMV topic parse skipped %s: %s", topic_url, exc)
+
+    return topics, active_base
+
+
+def _resolve_cyberloom_sync(url: str) -> str:
+    if not url or "cyberloom" not in url.lower():
+        return url
+    try:
+        scraper = _create_scraper()
+        r = scraper.get(url, timeout=15, allow_redirects=True)
+        if r.url and "cyberloom" not in r.url.lower():
+            return r.url
+        soup = BeautifulSoup(r.text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            if href.startswith(("http://", "https://")) and any(
+                tok in (a.get_text(" ", strip=True).lower() + " " + href.lower())
+                for tok in ("download", "direct", "dl", "file", "cdn", "storage")
+            ):
+                if "cyberloom" not in href.lower():
+                    return href
+    except Exception:
+        pass
+    return url
+
+
+def _download_torrent_file_sync(torrent_url: str, base_url: str, uid: int, title: str) -> str | None:
+    try:
+        scraper = _create_scraper()
+        r = scraper.get(torrent_url, timeout=25, headers={"Referer": base_url})
+        r.raise_for_status()
+        if not r.content:
+            return None
+        folder = f"/tmp/tmv_torrents_{uid}"
+        makedirs(folder, exist_ok=True)
+        safe_name = re.sub(r'[\\/:*?"<>|\s]+', "_", title).strip("_")[:100] or f"tmv_{int(time())}"
+        fp = ospath.join(folder, f"{safe_name}.torrent")
+        with open(fp, "wb") as f:
+            f.write(r.content)
+        return fp
+    except Exception as exc:
+        LOGGER.warning("TMV .torrent download failed (%s): %s", torrent_url, exc)
+        return None
+
+
+def _rel_links(rel: dict) -> list[str]:
+    return [l for l in (rel.get("torrent_link"), rel.get("direct_link"), rel.get("magnet")) if l]
+
+
+async def _pick_single_release_source(rel: dict, dl_mode: str, active_base: str, uid: int):
+    """Pick ONE link per release: prefer magnet or .torrent (via qBittorrent), else cyberloom/direct."""
+    if dl_mode == "direct" and rel.get("direct_link"):
+        link = await to_thread(_resolve_cyberloom_sync, rel["direct_link"])
+        return link, None, False
+    if dl_mode == "torrent" and rel.get("torrent_link"):
+        tor = await to_thread(_download_torrent_file_sync, rel["torrent_link"], active_base, uid, rel["title"])
+        return (tor or rel["torrent_link"]), tor, True
+    if dl_mode == "magnet" and rel.get("magnet"):
+        return rel["magnet"], None, True
+
+    # "all" or fallback: ALWAYS prefer magnet or .torrent (qBittorrent) over cyberloom
+    if rel.get("magnet"):
+        return rel["magnet"], None, True
+    if rel.get("torrent_link"):
+        tor = await to_thread(_download_torrent_file_sync, rel["torrent_link"], active_base, uid, rel["title"])
+        return (tor or rel["torrent_link"]), tor, True
+    if rel.get("direct_link"):
+        link = await to_thread(_resolve_cyberloom_sync, rel["direct_link"])
+        return link, None, False
+    return None, None, False
+
+
+async def _dispatch_release_to_lmb(
+    uid: int,
+    rel: dict,
+    poster_url: str | None,
+    active_base: str,
+    chat_id: int | None = None,
+    mode_override: dict | None = None,
+):
+    from .mirror_leech import Mirror
+
+    cfg = _get_tmv_cfg(uid)
+    dl_mode = cfg.get("download_mode", "all")
+    target_link, torrent_file_path, use_qbit = await _pick_single_release_source(
+        rel, dl_mode, active_base, uid
+    )
+    if not target_link:
+        return False
+
+    target_chat = chat_id or uid
+    is_leech = True
+    is_uphoster = False
+    up_dest_flag = ""
+
+    if mode_override is not None:
+        is_leech = bool(mode_override.get("is_leech", True))
+        is_uphoster = bool(mode_override.get("is_uphoster", False))
+        up_dest_flag = mode_override.get("up_dest", "")
+    elif cfg.get("settings_mode") == "independent":
+        ind = cfg.get("independent", {})
+        up_dest = str(ind.get("UPLOAD_DEST", "telegram") or "telegram").strip()
+        low_dest = up_dest.lower()
+        if low_dest in ("telegram", "tg", "leech"):
+            is_leech = True
+            is_uphoster = False
+        elif low_dest in ("uphoster", "ddl", "gofile", "buzzheavier", "pixeldrain"):
+            is_leech = False
+            is_uphoster = True
+            if low_dest not in ("uphoster", "ddl"):
+                up_dest_flag = low_dest
+        elif low_dest in ("mirror", "gdrive", "gd", "rclone", "rc"):
+            is_leech = False
+            is_uphoster = False
+            if low_dest in ("gd", "rc"):
+                up_dest_flag = low_dest
+        else:
+            is_leech = False
+            up_dest_flag = up_dest
+
+    if is_uphoster:
+        cmd_name = BotCommands.UpHosterCommand[0] if isinstance(BotCommands.UpHosterCommand, list) else BotCommands.UpHosterCommand
+    elif is_leech:
+        cmd_list = BotCommands.QbLeechCommand if use_qbit else BotCommands.LeechCommand
+        cmd_name = cmd_list[0] if isinstance(cmd_list, list) else cmd_list
+    else:
+        cmd_list = BotCommands.QbMirrorCommand if use_qbit else BotCommands.MirrorCommand
+        cmd_name = cmd_list[0] if isinstance(cmd_list, list) else cmd_list
+
+    flags = []
+    if mode_override is not None:
+        if mode_override.get("extra_flags"):
+            flags.append(mode_override["extra_flags"])
+        if poster_url and "-t " not in (mode_override.get("extra_flags") or ""):
+            flags.append(f"-t {poster_url}")
+    elif cfg.get("settings_mode") == "independent":
+        ind = cfg.get("independent", {})
+        flags.append("-doc" if ind.get("AS_DOCUMENT") else "-med")
+        if up_dest_flag:
+            flags.append(f"-up {up_dest_flag}")
+        elif is_leech and ind.get("LEECH_DUMP_CHAT"):
+            flags.append(f"-up {ind['LEECH_DUMP_CHAT']}")
+        if poster_url and ind.get("AUTO_THUMBNAIL", True):
+            flags.append(f"-t {poster_url}")
+    else:
+        if up_dest_flag:
+            flags.append(f"-up {up_dest_flag}")
+        if poster_url:
+            ud = user_data.get(uid, {})
+            if ud.get("AUTO_THUMBNAIL", getattr(Config, "AUTO_THUMBNAIL", True)):
+                flags.append(f"-t {poster_url}")
+
+    flag_str = " ".join(flags).strip()
+    if torrent_file_path and ospath.isfile(torrent_file_path):
+        cmd_text = f"/{cmd_name} {flag_str}".strip()
+        tor_msg = await TgClient.bot.send_document(
+            chat_id=target_chat,
+            document=torrent_file_path,
+            caption=f"🎬 <b>{escape(rel['title'])}</b> ({escape(str(rel.get('size', 'Unknown')))})",
+            disable_notification=True,
+        )
+        synth = await send_message(tor_msg, cmd_text)
+    else:
+        cmd_text = f"/{cmd_name} {target_link} {flag_str}".strip()
+        synth = await send_message(target_chat, cmd_text)
+
+    if not isinstance(synth, Message):
+        return False
+
+    with suppress(Exception):
+        synth = await TgClient.bot.get_messages(chat_id=target_chat, message_ids=synth.id)
+
+    if getattr(synth, "from_user", None) is None or synth.from_user.id != uid:
+        with suppress(Exception):
+            synth.from_user = await TgClient.bot.get_users(uid)
+
+    if mode_override is None and cfg.get("settings_mode") == "independent":
+        setattr(synth, "_tmv_overrides", dict(cfg.get("independent", {})))
+
+    await Mirror(
+        TgClient.bot,
+        synth,
+        is_qbit=use_qbit,
+        is_leech=is_leech,
+        is_uphoster=is_uphoster,
+    ).new_event()
+    return True
+
+
+async def _run_tmv_cycle(uid: int, force_notify: bool = False) -> tuple[int, str]:
+    cfg = _get_tmv_cfg(uid)
+    if cfg.get("paused"):
+        return 0, "Monitor is paused. Click Resume to continue."
+    base_url = cfg.get("domain") or cfg.get("active_domain") or ""
+    topics, active_base = await to_thread(crawl_tbl_sync, base_url, 15)
+    cfg["active_domain"] = active_base
+
+    seen_links = set(cfg.get("seen_links", []))
+    seen_topics = set(cfg.get("seen_topics", []))
+    is_first_run = not seen_links and not seen_topics
+
+    dispatched = 0
+    for topic in topics:
+        t_url = topic.get("topic_url", "")
+        releases = topic.get("releases", [])
+        poster_url = topic.get("poster_url")
+
+        if is_first_run:
+            if t_url:
+                seen_topics.add(_norm(t_url))
+                if tid := _topic_id(t_url):
+                    seen_topics.add(tid)
+            for rel in releases:
+                for l in _rel_links(rel):
+                    seen_links.add(_norm(l))
+            continue
+
+        new_releases = [
+            rel for rel in releases
+            if _rel_links(rel) and all(_norm(l) not in seen_links for l in _rel_links(rel))
+        ]
+        if not new_releases:
+            continue
+
+        for rel in new_releases[:5]:
+            ok = await _dispatch_release_to_lmb(uid, rel, poster_url, active_base)
+            if ok:
+                dispatched += 1
+            for l in _rel_links(rel):
+                seen_links.add(_norm(l))
+            await sleep(1.5)
+
+        if t_url:
+            seen_topics.add(_norm(t_url))
+            if tid := _topic_id(t_url):
+                seen_topics.add(tid)
+
+    cfg["seen_links"] = list(seen_links)[-500:]
+    cfg["seen_topics"] = list(seen_topics)[-300:]
+    await _save_tmv_cfg(uid)
+
+    if is_first_run and force_notify:
+        return 0, f"Initial cache completed on <code>{escape(active_base)}</code>. Future releases will auto-leech."
+    return dispatched, f"Checked <code>{escape(active_base)}</code> — queued <b>{dispatched}</b> new release(s)."
+
+
+async def _tmv_monitor_loop(uid: int):
+    LOGGER.info("TMV monitor started for user %s", uid)
+    while True:
+        cfg = _get_tmv_cfg(uid)
+        if not cfg.get("enabled"):
+            break
+        if not cfg.get("paused"):
+            try:
+                await _run_tmv_cycle(uid)
+            except Exception as exc:
+                LOGGER.warning("TMV monitor cycle error for %s: %s", uid, exc)
+        interval = max(60, int(cfg.get("interval", 360) or 360))
+        await sleep(interval)
+    _MONITOR_TASKS.pop(uid, None)
+    LOGGER.info("TMV monitor stopped for user %s", uid)
+
+
+def _ensure_monitor(uid: int):
+    task = _MONITOR_TASKS.get(uid)
+    if task is None or task.done():
+        _MONITOR_TASKS[uid] = bot_loop.create_task(_tmv_monitor_loop(uid))
+
+
+def _stop_monitor(uid: int):
+    task = _MONITOR_TASKS.pop(uid, None)
+    if task and not task.done():
+        task.cancel()
+
+
+async def start_tmv_monitors():
+    for uid, ud in list(user_data.items()):
+        if isinstance(ud, dict) and isinstance(ud.get("TMV_SETTINGS"), dict):
+            if ud["TMV_SETTINGS"].get("enabled"):
+                _ensure_monitor(int(uid))
+
+
+# ---------- -tmv Interactive Topic Quality Picker ----------
+
+def _render_picker_ui(token: str):
+    state = _TOPIC_PICKERS[token]
+    topic = state["topic"]
+    selected = state["selected"]
+    releases = topic["releases"]
+
+    lines = [
+        f"<b>🎬 {escape(topic['title'])}</b>",
+        f"<blockquote>Select qualities/releases to download (qBittorrent for magnet/torrent, fallback to direct):</blockquote>",
+    ]
+    btns = ButtonMaker()
+    for idx, rel in enumerate(releases):
+        mark = "✅" if idx in selected else "⬜"
+        src_tag = "🧲" if rel.get("magnet") else ("📄" if rel.get("torrent_link") else "🔗")
+        label = f"{mark} {src_tag} {rel['title'][:36]} ({rel.get('size', '?')})"
+        btns.data_button(label, f"tmvp {token} tog {idx}")
+    btns.data_button("☑️ Select All", f"tmvp {token} all", "footer")
+    btns.data_button("🧹 Clear", f"tmvp {token} none", "footer")
+    btns.data_button(f"✅ Done ({len(selected)})", f"tmvp {token} done", "footer", style=ButtonStyle.SUCCESS)
+    btns.data_button("❌ Cancel", f"tmvp {token} cancel", "footer", style=ButtonStyle.DANGER)
+    return "\n".join(lines), btns.build_menu(1)
+
+
+async def start_tmv_topic_picker(listener):
+    """Handle `<tamilmv_topic_url> -tmv`: scrape topic and let user select qualities before downloading."""
+    topic_url = listener.link
+    if not topic_url or "http" not in topic_url:
+        await send_message(listener.message, "⚠️ Please provide a valid 1TamilMV topic URL with <code>-tmv</code>.")
+        return
+
+    wait_msg = await send_message(listener.message, "🔍 <b>Fetching 1TamilMV topic qualities...</b>")
+    try:
+        scraper = _create_scraper()
+        topic = await to_thread(_parse_topic_sync, scraper, topic_url)
+    except Exception as exc:
+        await edit_message(wait_msg, f"❌ Failed to fetch topic: <code>{escape(str(exc))}</code>")
+        return
+
+    if not topic or not topic.get("releases"):
+        await edit_message(wait_msg, "⚠️ No downloadable releases (magnet/torrent/direct) found on this page.")
+        return
+
+    token = token_hex(4)
+    p = urlparse(topic_url)
+    active_base = f"{p.scheme}://{p.netloc}".rstrip("/")
+
+    extra_flags = []
+    if getattr(listener, "as_doc", False):
+        extra_flags.append("-doc")
+    elif getattr(listener, "as_med", False):
+        extra_flags.append("-med")
+    if getattr(listener, "thumb", None):
+        extra_flags.append(f"-t {listener.thumb}")
+    if getattr(listener, "up_dest", None):
+        extra_flags.append(f"-up {listener.up_dest}")
+
+    _TOPIC_PICKERS[token] = {
+        "uid": listener.user_id,
+        "chat_id": listener.message.chat.id,
+        "topic": topic,
+        "active_base": active_base,
+        "selected": set(),
+        "mode_override": {
+            "is_leech": bool(getattr(listener, "is_leech", False)),
+            "is_uphoster": bool(getattr(listener, "is_uphoster", False)),
+            "up_dest": getattr(listener, "up_dest", "") or "",
+            "extra_flags": " ".join(extra_flags),
+        },
+    }
+    text_msg, markup = _render_picker_ui(token)
+    await edit_message(wait_msg, text_msg, markup)
+
+
+@new_task
+async def tmv_picker_callback(_, query):
+    parts = query.data.split()
+    if len(parts) < 3:
+        await query.answer()
+        return
+    token, action = parts[1], parts[2]
+    state = _TOPIC_PICKERS.get(token)
+    if not state:
+        await query.answer("Selection expired.", show_alert=True)
+        return
+    if query.from_user.id != state["uid"]:
+        await query.answer("This selection menu is not for you!", show_alert=True)
+        return
+
+    releases = state["topic"]["releases"]
+    if action == "cancel":
+        _TOPIC_PICKERS.pop(token, None)
+        await query.answer("Cancelled")
+        await delete_message(query.message, query.message.reply_to_message)
+        return
+
+    if action == "tog" and len(parts) > 3:
+        idx = int(parts[3])
+        if idx in state["selected"]:
+            state["selected"].remove(idx)
+        else:
+            state["selected"].add(idx)
+        await query.answer()
+        text_msg, markup = _render_picker_ui(token)
+        await edit_message(query.message, text_msg, markup)
+        return
+
+    if action == "all":
+        state["selected"] = set(range(len(releases)))
+        await query.answer("All selected")
+        text_msg, markup = _render_picker_ui(token)
+        await edit_message(query.message, text_msg, markup)
+        return
+
+    if action == "none":
+        state["selected"].clear()
+        await query.answer("Selection cleared")
+        text_msg, markup = _render_picker_ui(token)
+        await edit_message(query.message, text_msg, markup)
+        return
+
+    if action == "done":
+        if not state["selected"]:
+            await query.answer("Select at least one quality first!", show_alert=True)
+            return
+        _TOPIC_PICKERS.pop(token, None)
+        chosen = [releases[i] for i in sorted(state["selected"]) if 0 <= i < len(releases)]
+        await query.answer(f"Starting {len(chosen)} download(s)...")
+        await edit_message(
+            query.message,
+            f"✅ <b>Queued {len(chosen)} release(s)</b> from <b>{escape(state['topic']['title'])}</b> — starting download &amp; upload...",
+        )
+        for rel in chosen:
+            await _dispatch_release_to_lmb(
+                state["uid"],
+                rel,
+                state["topic"].get("poster_url"),
+                state["active_base"],
+                chat_id=state["chat_id"],
+                mode_override=state["mode_override"],
+            )
+            await sleep(1.0)
+
+
+# ---------- /tmv DM Settings UI ----------
+
+def _build_home_ui(uid: int):
+    cfg = _get_tmv_cfg(uid)
+    enabled = bool(cfg.get("enabled"))
+    paused = bool(cfg.get("paused"))
+    status_label = "🟡 Paused" if (enabled and paused) else ("🟢 Running" if enabled else "🔴 Stopped")
+    domain_disp = cfg.get("domain") or cfg.get("active_domain") or DEFAULT_BASE_URL
+    mode_label = "Independent" if cfg.get("settings_mode") == "independent" else "User Settings"
+    dl_mode = str(cfg.get("download_mode", "all")).upper()
+    interval = int(cfg.get("interval", 360) or 360)
+
+    text_msg = (
+        f"<b>🎬 1TamilMV Auto-Leech (/tmv)</b>\n\n"
+        f"<blockquote>"
+        f"• <b>Status:</b> {status_label}\n"
+        f"• <b>Domains:</b> <code>{escape(domain_disp)}</code>\n"
+        f"• <b>Active Domain:</b> <code>{escape(cfg.get('active_domain') or DEFAULT_BASE_URL)}</code>\n"
+        f"• <b>Settings Mode:</b> <b>{mode_label}</b>\n"
+        f"• <b>Link Filter:</b> <code>{dl_mode}</code>\n"
+        f"• <b>Check Interval:</b> <code>{get_readable_time(interval)}</code>"
+        f"</blockquote>"
+    )
+    btns = ButtonMaker()
+    btns.data_button("🌐 Set Domain", f"tmv {uid} domain")
+    btns.data_button("🔍 Auto-Detect Domain", f"tmv {uid} autodomain")
+    btns.data_button(
+        "⏹️ Stop Monitor" if enabled else "▶️ Start Monitor",
+        f"tmv {uid} toggle",
+        style=ButtonStyle.DANGER if enabled else ButtonStyle.SUCCESS,
+    )
+    if paused:
+        btns.data_button("▶️ Resume", f"tmv {uid} resume", style=ButtonStyle.SUCCESS)
+    else:
+        btns.data_button("⏸️ Pause", f"tmv {uid} pause", style=ButtonStyle.PRIMARY)
+    btns.data_button("🔄 Check Now", f"tmv {uid} checknow")
+    btns.data_button("⚙️ Settings", f"tmv {uid} settings", style=ButtonStyle.PRIMARY)
+    btns.data_button("❌ Close", f"tmv {uid} close", "footer", style=ButtonStyle.DANGER)
+    return text_msg, btns.build_menu(2)
+
+
+def _build_settings_mode_ui(uid: int):
+    cfg = _get_tmv_cfg(uid)
+    mode = cfg.get("settings_mode", "user")
+    text_msg = (
+        f"<b>⚙️ /tmv Settings Mode</b>\n\n"
+        f"<blockquote>"
+        f"• <b>Active Mode:</b> <b>{'Independent' if mode == 'independent' else 'User Settings'}</b>\n\n"
+        f"• <b>Independent:</b> Configure dedicated upload destination (Telegram / Mirror / Uphoster), dump chat, thumbnail, document/media, and caption settings just for <code>/tmv</code>.\n"
+        f"• <b>User Settings:</b> Automatically apply your main <code>/{BotCommands.UserSetCommand[0]}</code> configuration for all <code>/tmv</code> tasks."
+        f"</blockquote>"
+    )
+    btns = ButtonMaker()
+    btns.data_button(
+        f"{'✅ ' if mode == 'independent' else ''}🎛️ Independent",
+        f"tmv {uid} mode independent",
+    )
+    btns.data_button(
+        f"{'✅ ' if mode == 'user' else ''}👤 User Settings",
+        f"tmv {uid} mode user",
+    )
+    btns.data_button("🔙 Back", f"tmv {uid} home", "footer")
+    return text_msg, btns.build_menu(2)
+
+
+def _build_independent_ui(uid: int):
+    cfg = _get_tmv_cfg(uid)
+    ind = cfg.get("independent", {})
+    dl_mode = cfg.get("download_mode", "all").upper()
+    interval = int(cfg.get("interval", 360) or 360)
+    up_dest = ind.get("UPLOAD_DEST", "telegram")
+    dump_val = ind.get("LEECH_DUMP_CHAT") or "Default (Bot Settings)"
+    as_doc = "Document" if ind.get("AS_DOCUMENT") else "Media"
+    auto_thumb = "ON" if ind.get("AUTO_THUMBNAIL", True) else "OFF"
+    prefix = ind.get("LEECH_PREFIX") or "None"
+    suffix = ind.get("LEECH_SUFFIX") or "None"
+    caption = ind.get("LEECH_CAPTION") or "Default"
+
+    text_msg = (
+        f"<b>🎛️ /tmv Independent Settings</b>\n\n"
+        f"<blockquote>"
+        f"• <b>Upload Destination:</b> <code>{escape(str(up_dest))}</code>\n"
+        f"• <b>Dump Chat:</b> <code>{escape(str(dump_val))}</code>\n"
+        f"• <b>Upload As:</b> <code>{as_doc}</code>\n"
+        f"• <b>Auto Poster Thumb:</b> <code>{auto_thumb}</code>\n"
+        f"• <b>Link Filter:</b> <code>{dl_mode}</code>\n"
+        f"• <b>Interval:</b> <code>{get_readable_time(interval)}</code>\n"
+        f"• <b>Prefix:</b> <code>{escape(str(prefix))}</code> | <b>Suffix:</b> <code>{escape(str(suffix))}</code>\n"
+        f"• <b>Caption:</b> <code>{escape(str(caption)[:40])}</code>"
+        f"</blockquote>"
+    )
+    btns = ButtonMaker()
+    btns.data_button("📤 Upload Destination", f"tmv {uid} ind_updest")
+    btns.data_button("📥 Set Dump Chat", f"tmv {uid} ind_dump")
+    btns.data_button(f"📁 Mode: {as_doc}", f"tmv {uid} ind_doc")
+    btns.data_button(f"🖼️ Auto Thumb: {auto_thumb}", f"tmv {uid} ind_thumb")
+    btns.data_button(f"🔗 Filter: {dl_mode}", f"tmv {uid} ind_filter")
+    btns.data_button("⏱️ Set Interval", f"tmv {uid} ind_interval")
+    btns.data_button("✏️ Prefix", f"tmv {uid} ind_prefix")
+    btns.data_button("✏️ Suffix", f"tmv {uid} ind_suffix")
+    btns.data_button("📝 Caption", f"tmv {uid} ind_caption")
+    btns.data_button("🔄 Reset Defaults", f"tmv {uid} ind_reset")
+    btns.data_button("🔙 Back", f"tmv {uid} settings", "footer")
+    return text_msg, btns.build_menu(2)
+
+
+def _build_updest_ui(uid: int):
+    cfg = _get_tmv_cfg(uid)
+    cur = cfg["independent"].get("UPLOAD_DEST", "telegram")
+    text_msg = (
+        f"<b>📤 Select /tmv Upload Destination</b>\n\n"
+        f"<blockquote><b>Current:</b> <code>{escape(str(cur))}</code></blockquote>"
+    )
+    btns = ButtonMaker()
+    btns.data_button("💎 Telegram (Leech)", f"tmv {uid} set_updest telegram")
+    btns.data_button("☁️ Mirror (GDrive/Rclone)", f"tmv {uid} set_updest mirror")
+    btns.data_button("🌐 Uphoster (DDL)", f"tmv {uid} set_updest uphoster")
+    btns.data_button("✏️ Custom (-up Target)", f"tmv {uid} ind_updest_custom")
+    btns.data_button("🔙 Back", f"tmv {uid} mode independent", "footer")
+    return text_msg, btns.build_menu(2)
+
+
+async def _wait_dm_input(client, uid: int, prompt_msg, prompt_text: str):
+    btns = ButtonMaker()
+    btns.data_button("❌ Cancel", f"tmv {uid} cancel_input")
+    await edit_message(prompt_msg, prompt_text, btns.build_menu(1))
+    evt = Event()
+    got = {"text": None, "cancelled": False}
+
+    async def _on_msg(_, msg):
+        if msg.from_user and msg.from_user.id == uid:
+            got["text"] = (msg.text or "").strip()
+            evt.set()
+
+    async def _on_cancel(_, query):
+        if query.data == f"tmv {uid} cancel_input" and query.from_user.id == uid:
+            await query.answer("Cancelled")
+            got["cancelled"] = True
+            evt.set()
+
+    mh = client.add_handler(MessageHandler(_on_msg, filters=text & user(uid) & private), group=-1)
+    ch = client.add_handler(
+        CallbackQueryHandler(
+            _on_cancel,
+            filters=create(lambda _, __, q: q.data == f"tmv {uid} cancel_input" and q.from_user.id == uid),
+        ),
+        group=-1,
+    )
+    try:
+        await wait_for(evt.wait(), timeout=_INPUT_WAIT_TIMEOUT)
+    except AsyncTimeout:
+        return None
+    finally:
+        with suppress(Exception):
+            client.remove_handler(*mh)
+            client.remove_handler(*ch)
+
+    if got["cancelled"]:
+        return None
+    return got["text"]
+
+
+@new_task
+async def tmv_command(_, message):
+    if message.chat.type != ChatType.PRIVATE:
+        btns = ButtonMaker()
+        tmv_cmd = BotCommands.TmvCommand[0] if isinstance(BotCommands.TmvCommand, list) else BotCommands.TmvCommand
+        btns.url_button("🎬 Open /tmv in Bot DM", f"https://t.me/{TgClient.BNAME}?start=tmv")
+        await send_message(
+            message,
+            f"⚠️ Please use <code>/{tmv_cmd}</code> in my private DM.",
+            btns.build_menu(1),
+        )
+        return
+
+    uid = message.from_user.id
+    text_msg, markup = _build_home_ui(uid)
+    await send_message(message, text_msg, markup)
+
+
+@new_task
+async def tmv_callback(client, query):
+    data = query.data.split()
+    if len(data) < 3:
+        await query.answer()
+        return
+    uid = int(data[1])
+    action = data[2]
+    if query.from_user.id != uid:
+        await query.answer("This menu is not for you!", show_alert=True)
+        return
+
+    msg = query.message
+    cfg = _get_tmv_cfg(uid)
+
+    if action == "close":
+        await query.answer()
+        await delete_message(msg, msg.reply_to_message)
+        return
+
+    if action == "home":
+        await query.answer()
+        text_msg, markup = _build_home_ui(uid)
+        await edit_message(msg, text_msg, markup)
+        return
+
+    if action == "settings":
+        await query.answer()
+        text_msg, markup = _build_settings_mode_ui(uid)
+        await edit_message(msg, text_msg, markup)
+        return
+
+    if action == "mode":
+        target_mode = data[3] if len(data) > 3 else "user"
+        cfg["settings_mode"] = target_mode
+        await _save_tmv_cfg(uid)
+        if target_mode == "independent":
+            await query.answer("Independent mode selected!")
+            text_msg, markup = _build_independent_ui(uid)
+            await edit_message(msg, text_msg, markup)
+        else:
+            await query.answer("User Settings mode enabled for /tmv!", show_alert=True)
+            text_msg, markup = _build_settings_mode_ui(uid)
+            await edit_message(msg, text_msg, markup)
+        return
+
+    if action == "autodomain":
+        await query.answer("Discovering active 1TamilMV domain...")
+        discovered = await to_thread(discover_active_domain_sync)
+        cfg["domain"] = ""
+        cfg["active_domain"] = discovered
+        await _save_tmv_cfg(uid)
+        text_msg, markup = _build_home_ui(uid)
+        await edit_message(msg, text_msg, markup)
+        return
+
+    if action == "domain":
+        await query.answer()
+        val = await _wait_dm_input(
+            client,
+            uid,
+            msg,
+            "🌐 <b>Set 1TamilMV Domain(s)</b>\n\n"
+            "Send one or multiple domains separated by commas (e.g. "
+            "<code>https://www.1tamilmv.ceo, https://www.1tamilmv.fi</code>) "
+            "or send <code>auto</code> for automatic discovery.",
+        )
+        if val is not None:
+            if val.lower() == "auto":
+                cfg["domain"] = ""
+                cfg["active_domain"] = await to_thread(discover_active_domain_sync)
+            else:
+                doms = _parse_domains_list(val)
+                cfg["domain"] = ", ".join(doms)
+                cfg["active_domain"] = await to_thread(discover_active_domain_sync, cfg["domain"])
+            await _save_tmv_cfg(uid)
+        text_msg, markup = _build_home_ui(uid)
+        await edit_message(msg, text_msg, markup)
+        return
+
+    if action == "toggle":
+        cfg["enabled"] = not bool(cfg.get("enabled"))
+        if cfg["enabled"]:
+            cfg["paused"] = False
+            _ensure_monitor(uid)
+            await query.answer("1TamilMV monitor started!")
+        else:
+            _stop_monitor(uid)
+            await query.answer("1TamilMV monitor stopped!")
+        await _save_tmv_cfg(uid)
+        text_msg, markup = _build_home_ui(uid)
+        await edit_message(msg, text_msg, markup)
+        return
+
+    if action == "pause":
+        cfg["paused"] = True
+        await _save_tmv_cfg(uid)
+        await query.answer("1TamilMV monitor paused! No monitoring or processing will run.")
+        text_msg, markup = _build_home_ui(uid)
+        await edit_message(msg, text_msg, markup)
+        return
+
+    if action == "resume":
+        cfg["paused"] = False
+        cfg["enabled"] = True
+        await _save_tmv_cfg(uid)
+        _ensure_monitor(uid)
+        await query.answer("1TamilMV monitor resumed! Checking for releases...")
+        _, note = await _run_tmv_cycle(uid, force_notify=True)
+        text_msg, markup = _build_home_ui(uid)
+        await edit_message(msg, f"{text_msg}\n\n📡 {note}", markup)
+        return
+
+    if action == "checknow":
+        await query.answer("Checking 1TamilMV for new releases...")
+        _, note = await _run_tmv_cycle(uid, force_notify=True)
+        text_msg, markup = _build_home_ui(uid)
+        await edit_message(msg, f"{text_msg}\n\n📡 {note}", markup)
+        return
+
+    ind = cfg["independent"]
+    if action == "ind_updest":
+        await query.answer()
+        text_msg, markup = _build_updest_ui(uid)
+        await edit_message(msg, text_msg, markup)
+        return
+    if action == "set_updest" and len(data) > 3:
+        ind["UPLOAD_DEST"] = data[3]
+        await _save_tmv_cfg(uid)
+        await query.answer(f"Upload Destination set to {data[3]}")
+    elif action == "ind_updest_custom":
+        await query.answer()
+        val = await _wait_dm_input(
+            client,
+            uid,
+            msg,
+            "📤 <b>Custom Upload Destination</b>\n\nSend destination (e.g., <code>gd</code>, <code>rc</code>, <code>gofile</code>, <code>buzzheavier</code>, or chat/folder ID):",
+        )
+        if val is not None:
+            ind["UPLOAD_DEST"] = val.strip()
+            await _save_tmv_cfg(uid)
+    elif action == "ind_doc":
+        ind["AS_DOCUMENT"] = not bool(ind.get("AS_DOCUMENT"))
+        await _save_tmv_cfg(uid)
+        await query.answer(f"Upload mode: {'Document' if ind['AS_DOCUMENT'] else 'Media'}")
+    elif action == "ind_thumb":
+        ind["AUTO_THUMBNAIL"] = not bool(ind.get("AUTO_THUMBNAIL", True))
+        await _save_tmv_cfg(uid)
+        await query.answer(f"Auto Poster Thumb: {'ON' if ind['AUTO_THUMBNAIL'] else 'OFF'}")
+    elif action == "ind_filter":
+        order = ["all", "magnet", "direct", "torrent"]
+        cur = cfg.get("download_mode", "all")
+        nxt = order[(order.index(cur) + 1) % len(order)] if cur in order else "all"
+        cfg["download_mode"] = nxt
+        await _save_tmv_cfg(uid)
+        await query.answer(f"Link Filter: {nxt.upper()}")
+    elif action == "ind_dump":
+        await query.answer()
+        val = await _wait_dm_input(
+            client,
+            uid,
+            msg,
+            "📥 <b>Set Independent Dump Chat</b>\n\nSend chat ID (e.g. <code>-1001234567890</code>) or <code>none</code> to use default.",
+        )
+        if val is not None:
+            ind["LEECH_DUMP_CHAT"] = "" if val.lower() == "none" else val.strip()
+            await _save_tmv_cfg(uid)
+    elif action == "ind_interval":
+        await query.answer()
+        val = await _wait_dm_input(
+            client,
+            uid,
+            msg,
+            "⏱️ <b>Set Check Interval (seconds)</b>\n\nSend interval in seconds (minimum <code>60</code>, default <code>360</code>).",
+        )
+        if val is not None and val.isdigit():
+            cfg["interval"] = max(60, int(val))
+            await _save_tmv_cfg(uid)
+    elif action == "ind_prefix":
+        await query.answer()
+        val = await _wait_dm_input(
+            client,
+            uid,
+            msg,
+            "✏️ <b>Set Leech Prefix</b>\n\nSend prefix text or <code>none</code> to clear.",
+        )
+        if val is not None:
+            ind["LEECH_PREFIX"] = "" if val.lower() == "none" else val
+            await _save_tmv_cfg(uid)
+    elif action == "ind_suffix":
+        await query.answer()
+        val = await _wait_dm_input(
+            client,
+            uid,
+            msg,
+            "✏️ <b>Set Leech Suffix</b>\n\nSend suffix text or <code>none</code> to clear.",
+        )
+        if val is not None:
+            ind["LEECH_SUFFIX"] = "" if val.lower() == "none" else val
+            await _save_tmv_cfg(uid)
+    elif action == "ind_caption":
+        await query.answer()
+        val = await _wait_dm_input(
+            client,
+            uid,
+            msg,
+            "📝 <b>Set Custom Leech Caption</b>\n\nSend caption template or <code>none</code> to reset.",
+        )
+        if val is not None:
+            ind["LEECH_CAPTION"] = "" if val.lower() == "none" else val
+            await _save_tmv_cfg(uid)
+    elif action == "ind_reset":
+        cfg["independent"] = dict(_default_tmv_settings()["independent"])
+        cfg["download_mode"] = "all"
+        cfg["interval"] = 360
+        await _save_tmv_cfg(uid)
+        await query.answer("Independent settings reset!")
+
+    text_msg, markup = _build_independent_ui(uid)
+    await edit_message(msg, text_msg, markup)

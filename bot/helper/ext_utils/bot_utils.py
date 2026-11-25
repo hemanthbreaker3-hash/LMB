@@ -272,6 +272,7 @@ def arg_parser(items, arg_base):
         "-tm",
         "-tc",
         "-vt",
+        "-tmv",
         "-as",
         "-audosplit",
     }

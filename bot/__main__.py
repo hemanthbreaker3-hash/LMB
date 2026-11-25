@@ -107,6 +107,7 @@ async def main():
     from .modules import (
         get_packages_version,
         initiate_search_tools,
+        start_tmv_monitors,
     )
 
     await save_settings()
@@ -120,6 +121,7 @@ async def main():
     bot_loop.create_task(telegraph.create_account())
     bot_loop.create_task(rclone_serve_booter())
     bot_loop.create_task(search_images())
+    bot_loop.create_task(start_tmv_monitors())
 
 
 bot_loop.run_until_complete(main())

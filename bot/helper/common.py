@@ -203,6 +203,10 @@ class TaskConfig:
         self.user = self.message.from_user or self.message.sender_chat
         self.user_id = self.user.id
         self.user_dict = user_data.get(self.user_id, {})
+        if tmv_ov := getattr(self.message, "_tmv_overrides", None):
+            merged_ud = dict(self.user_dict)
+            merged_ud.update({k: v for k, v in tmv_ov.items() if v != "" or k in ("LEECH_PREFIX", "LEECH_SUFFIX")})
+            self.user_dict = merged_ud
         self.metadata_processor = MetadataProcessor()
         set_all_meta = self.user_dict.get("SET_ALL_METADATA_ENABLE", False) and self.user_dict.get(
             "SET_ALL_METADATA"

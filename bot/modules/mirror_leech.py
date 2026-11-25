@@ -170,6 +170,7 @@ class Mirror(TaskListener):
             "-ad": False,
             "-yt": False,
             "-vt": False,
+            "-tmv": False,
             "-as": False,
             "-audosplit": False,
             "-seedr": False,
@@ -217,6 +218,9 @@ class Mirror(TaskListener):
         if "-vt" in input_list:
             args["-vt"] = True
             input_list = [token for token in input_list if token != "-vt"]
+        if "-tmv" in input_list:
+            args["-tmv"] = True
+            input_list = [token for token in input_list if token != "-tmv"]
 
         # Track-manager switches are standalone booleans. Remove them before
         # parsing so a URL placed after -tm/-tr is still detected as the link.
@@ -340,6 +344,11 @@ class Mirror(TaskListener):
         from ..helper.ext_utils.task_manager import get_task_key
         task_source = self.link or (self.message.reply_to_message.text if self.message.reply_to_message and self.message.reply_to_message.text else "") or self.name
         self.task_key = get_task_key(task_source, self.user_id)
+
+        if args.get("-tmv"):
+            from .tmv import start_tmv_topic_picker
+            await start_tmv_topic_picker(self)
+            return
 
         if self.is_seedr and not await seedr_guard(self.message, self.user_id):
             return

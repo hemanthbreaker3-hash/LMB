@@ -38,6 +38,19 @@ async def add_handlers():
     )
     TgClient.bot.add_handler(
         MessageHandler(
+            tmv_command,
+            filters=command(BotCommands.TmvCommand, case_sensitive=False)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        CallbackQueryHandler(tmv_callback, filters=regex(r"^tmv\s"))
+    )
+    TgClient.bot.add_handler(
+        CallbackQueryHandler(tmv_picker_callback, filters=regex(r"^tmvp\s"))
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
             gen_session_cmd,
             filters=command(BotCommands.GenSessionCommand, case_sensitive=False)
             & CustomFilters.sudo,

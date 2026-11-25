@@ -72,6 +72,7 @@ class BotCommands:
         "RemovePremium": "removepremium",
         "Mention": "mention",
         "GenSession": ["gensession", "gs"],
+        "Tmv": "tmv",
     }
 
     @classmethod
