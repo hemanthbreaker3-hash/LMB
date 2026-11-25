@@ -239,7 +239,12 @@ PY
 info "Validating Docker Compose configuration (project=${COMPOSE_PROJECT_NAME})..."
 "${COMPOSE[@]}" config --quiet || die "Compose configuration is invalid. Check .env and docker-compose.yml."
 info "Building and starting LMB container..."
-"${COMPOSE[@]}" up -d --build --remove-orphans
+"${COMPOSE[@]}" build
+if ! "${COMPOSE[@]}" run --rm --no-deps --entrypoint "" lmb test -x /usr/bin/aria2c >/dev/null 2>&1; then
+  warn "Cached image is missing /usr/bin/aria2c; forcing clean rebuild (--no-cache)..."
+  "${COMPOSE[@]}" build --no-cache
+fi
+"${COMPOSE[@]}" up -d --remove-orphans
 
 PORT_VALUE="$(python3 - <<'PY'
 import json, pathlib

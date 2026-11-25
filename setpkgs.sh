@@ -10,12 +10,13 @@ for _cand in /usr/bin/aria2c /usr/local/bin/aria2c "$(command -v "$1" 2>/dev/nul
 done
 if [ -z "$ARIA2C" ] && [ "$(id -u)" -eq 0 ] && command -v apt-get >/dev/null 2>&1; then
     echo "setpkgs: aria2c missing or not executable; installing aria2..." >&2
-    apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq aria2 >&2 || true
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends aria2 >&2 || true
     [ -x /usr/bin/aria2c ] && ARIA2C=/usr/bin/aria2c
 fi
 if [ -z "$ARIA2C" ]; then
     echo "setpkgs: ERROR: no working aria2c found (PATH=$PATH)" >&2
     ls -la /usr/bin/aria2* /usr/local/bin/aria2* >&2 2>/dev/null || true
+    find / -maxdepth 4 -name 'aria2c' 2>/dev/null >&2 || true
     exit 1
 fi
 SERVICE_CORES=${2:-}

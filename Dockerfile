@@ -21,7 +21,7 @@ RUN apt-get update -qq && apt-get install -y \
         rm -f "/usr/local/bin/$bin"; \
       fi; \
     done && \
-    aria2c --version >/dev/null && ffmpeg -version >/dev/null && 7z --help >/dev/null && rclone --version >/dev/null && qbittorrent-nox --version >/dev/null && \
+    test -x /usr/bin/aria2c && /usr/bin/aria2c --version >/dev/null && ffmpeg -version >/dev/null && 7z --help >/dev/null && rclone --version >/dev/null && qbittorrent-nox --version >/dev/null && \
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip uninstall --python /wzvenv/bin/python -y pyrogram kurigram pyrofork wzgram wzxpyro || true && \
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip install --python /wzvenv/bin/python --no-cache-dir -U -r requirements.txt && \
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip install --python /wzvenv/bin/python --no-cache-dir -U "cbgram[fast]" cbcrypto
