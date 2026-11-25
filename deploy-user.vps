@@ -29,7 +29,7 @@ if [[ ! -x venv/bin/python ]]; then "$PYTHON" -m venv venv || fail "Could not cr
 venv/bin/python -m pip install --upgrade pip setuptools wheel
 venv/bin/python -m pip install -r requirements.txt
 venv/bin/python -m pip uninstall -y pyrogram kurigram pyrofork wzgram wzxpyro >/dev/null 2>&1 || true
-venv/bin/python -m pip install --upgrade 'cbgram[fast]' cbcrypto imdbinfo pycountry aiofiles pyyaml 'numpy>=1.26,<3'
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 venv/bin/python -m pip install --upgrade 'cbgram[fast]' cbcrypto imdbinfo pycountry aiofiles pyyaml 'numpy>=1.26,<3'
 venv/bin/python -m pip install --upgrade --pre 'yt-dlp[default,curl-cffi]' yt-dlp-ejs
 venv/bin/python -m pip install --upgrade 'bgutil-ytdlp-pot-provider==2.0.2' || echo 'WARNING: optional PO-token plugin could not be installed.' >&2
 venv/bin/python - <<'PY_DEPENDENCY_PREFLIGHT'
