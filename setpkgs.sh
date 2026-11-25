@@ -1,6 +1,10 @@
 #!/bin/bash
+export PATH="/usr/bin:/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/sbin:${PATH:-}"
 
 ARIA2C=$1
+if ! command -v "$ARIA2C" >/dev/null 2>&1 && [ -x /usr/bin/aria2c ]; then
+    ARIA2C=/usr/bin/aria2c
+fi
 SERVICE_CORES=${2:-}
 CPU_LIMIT=${3:-20}
 SABNZBDPLUS=$4
