@@ -68,6 +68,8 @@ def _default_tmv_settings() -> dict:
     return {
         "enabled": False,
         "paused": False,
+        "baseline_initialized": False,
+        "dumps": [],  # list of {"name": "." or keyword, "chat_id": str}
         "domain": "",
         "active_domain": DEFAULT_BASE_URL,
         "settings_mode": "user",  # "user" | "independent"
@@ -108,6 +110,8 @@ def _get_tmv_cfg(uid: int) -> dict:
         cfg["seen_links"] = []
     if not isinstance(cfg.get("seen_topics"), list):
         cfg["seen_topics"] = []
+    if not isinstance(cfg.get("dumps"), list):
+        cfg["dumps"] = []
     return cfg
 
 
@@ -350,16 +354,24 @@ def crawl_tbl_sync(base_domains: str, max_topics: int = 15):
     topic_links = top_links + rest_links
     scan_limit = len(top_links) + max_topics
 
-    topics = []
-    for topic_url in topic_links[:scan_limit]:
-        if _norm(topic_url) in _DEAD_TOPICS:
-            continue
+    from concurrent.futures import ThreadPoolExecutor
+
+    target_urls = [u for u in topic_links[:scan_limit] if _norm(u) not in _DEAD_TOPICS]
+    forum_ref = f"{active_base}/index.php?/forums/topic/"
+
+    def _fetch_one(t_url):
         try:
-            topic = _parse_topic_sync(scraper, topic_url, f"{active_base}/index.php?/forums/topic/")
-            if topic:
-                topics.append(topic)
+            return _parse_topic_sync(_create_scraper(), t_url, forum_ref)
         except Exception as exc:
-            LOGGER.debug("TMV topic parse skipped %s: %s", topic_url, exc)
+            LOGGER.debug("TMV topic parse skipped %s: %s", t_url, exc)
+            return None
+
+    topics = []
+    if target_urls:
+        with ThreadPoolExecutor(max_workers=min(6, len(target_urls))) as pool:
+            for res in pool.map(_fetch_one, target_urls):
+                if res:
+                    topics.append(res)
 
     return topics, active_base
 
@@ -538,6 +550,8 @@ async def _dispatch_release_to_lmb(
 
     if mode_override is None and cfg.get("settings_mode") == "independent":
         setattr(synth, "_tmv_overrides", dict(cfg.get("independent", {})))
+    if cfg.get("dumps"):
+        setattr(synth, "_tmv_dump_rules", list(cfg.get("dumps", [])))
 
     await Mirror(
         TgClient.bot,
@@ -557,9 +571,27 @@ async def _run_tmv_cycle(uid: int, force_notify: bool = False) -> tuple[int, str
     topics, active_base = await to_thread(crawl_tbl_sync, base_url, 15)
     cfg["active_domain"] = active_base
 
-    seen_links = set(cfg.get("seen_links", []))
-    seen_topics = set(cfg.get("seen_topics", []))
-    is_first_run = not seen_links and not seen_topics
+    seen_links = list(cfg.get("seen_links", []))
+    seen_links_set = set(seen_links)
+    seen_topics = list(cfg.get("seen_topics", []))
+    seen_topics_set = set(seen_topics)
+    is_first_run = (not cfg.get("baseline_initialized")) or (not seen_links_set and not seen_topics_set)
+
+    def _remember_link(link_val):
+        nk = _norm(link_val)
+        if nk and nk not in seen_links_set:
+            seen_links_set.add(nk)
+            seen_links.append(nk)
+
+    def _remember_topic(topic_val):
+        nt = _norm(topic_val)
+        if nt and nt not in seen_topics_set:
+            seen_topics_set.add(nt)
+            seen_topics.append(nt)
+        tid = _topic_id(topic_val)
+        if tid and tid not in seen_topics_set:
+            seen_topics_set.add(tid)
+            seen_topics.append(tid)
 
     dispatched = 0
     for topic in topics:
@@ -569,19 +601,19 @@ async def _run_tmv_cycle(uid: int, force_notify: bool = False) -> tuple[int, str
 
         if is_first_run:
             if t_url:
-                seen_topics.add(_norm(t_url))
-                if tid := _topic_id(t_url):
-                    seen_topics.add(tid)
+                _remember_topic(t_url)
             for rel in releases:
                 for l in _rel_links(rel):
-                    seen_links.add(_norm(l))
+                    _remember_link(l)
             continue
 
         new_releases = [
             rel for rel in releases
-            if _rel_links(rel) and all(_norm(l) not in seen_links for l in _rel_links(rel))
+            if _rel_links(rel) and all(_norm(l) not in seen_links_set for l in _rel_links(rel))
         ]
         if not new_releases:
+            if t_url:
+                _remember_topic(t_url)
             continue
 
         for rel in new_releases[:5]:
@@ -589,20 +621,19 @@ async def _run_tmv_cycle(uid: int, force_notify: bool = False) -> tuple[int, str
             if ok:
                 dispatched += 1
             for l in _rel_links(rel):
-                seen_links.add(_norm(l))
-            await sleep(1.5)
+                _remember_link(l)
+            await sleep(1.0)
 
         if t_url:
-            seen_topics.add(_norm(t_url))
-            if tid := _topic_id(t_url):
-                seen_topics.add(tid)
+            _remember_topic(t_url)
 
-    cfg["seen_links"] = list(seen_links)[-500:]
-    cfg["seen_topics"] = list(seen_topics)[-300:]
+    cfg["baseline_initialized"] = True
+    cfg["seen_links"] = seen_links[-5000:]
+    cfg["seen_topics"] = seen_topics[-2000:]
     await _save_tmv_cfg(uid)
 
     if is_first_run and force_notify:
-        return 0, f"Initial cache completed on <code>{escape(active_base)}</code>. Future releases will auto-leech."
+        return 0, f"Baseline cached on <code>{escape(active_base)}</code>. Only new incoming releases will download."
     return dispatched, f"Checked <code>{escape(active_base)}</code> — queued <b>{dispatched}</b> new release(s)."
 
 
@@ -898,7 +929,8 @@ def _build_home_ui(uid: int):
         f"• <b>Active Domain:</b> <code>{escape(cfg.get('active_domain') or DEFAULT_BASE_URL)}</code>\n"
         f"• <b>Settings Mode:</b> <b>{mode_label}</b>\n"
         f"• <b>Link Filter:</b> <code>{dl_mode}</code>\n"
-        f"• <b>Check Interval:</b> <code>{get_readable_time(interval)}</code>"
+        f"• <b>Check Interval:</b> <code>{get_readable_time(interval)}</code>\n"
+        f"• <b>Dump Rules:</b> <code>{len(cfg.get('dumps', []))}</code>"
         f"</blockquote>"
     )
     btns = ButtonMaker()
@@ -914,10 +946,40 @@ def _build_home_ui(uid: int):
     else:
         btns.data_button("⏸️ Pause", f"tmv {uid} pause", style=ButtonStyle.PRIMARY)
     btns.data_button("🔄 Check Now", f"tmv {uid} checknow")
+    btns.data_button("📥 Dumps", f"tmv {uid} dumps")
     btns.data_button("⚙️ Settings", f"tmv {uid} settings", style=ButtonStyle.PRIMARY)
     btns.data_button("❌ Close", f"tmv {uid} close", "footer", style=ButtonStyle.DANGER)
     return text_msg, btns.build_menu(2)
 
+
+
+def _build_dumps_ui(uid: int):
+    cfg = _get_tmv_cfg(uid)
+    dumps = cfg.get("dumps", [])
+    if dumps:
+        rules_lines = "\n".join(
+            f"• <b>{i + 1}.</b> <code>{escape(str(d.get('name', '.')))}</code> → <code>{escape(str(d.get('chat_id', '')))}</code>"
+            for i, d in enumerate(dumps)
+        )
+    else:
+        rules_lines = "<i>No custom dump rules added yet.</i>"
+
+    text_msg = (
+        f"<b>📥 /tmv Dump Rules ({len(dumps)})</b>\n\n"
+        f"<blockquote>"
+        f"{rules_lines}\n\n"
+        f"• Use <code>. | -100xxxx</code> to send <b>all</b> files to that dump.\n"
+        f"• Use <code>dvd | -100xxxx</code> to send files matching <code>dvd</code> in filename or caption."
+        f"</blockquote>"
+    )
+    btns = ButtonMaker()
+    btns.data_button("➕ Add Dump", f"tmv {uid} add_dump", style=ButtonStyle.SUCCESS)
+    if dumps:
+        btns.data_button("🧹 Clear All", f"tmv {uid} clear_dumps", style=ButtonStyle.DANGER)
+        for i, d in enumerate(dumps[:20]):
+            btns.data_button(f"🗑️ {i + 1}. {str(d.get('name', '.'))[:14]}", f"tmv {uid} del_dump {i}")
+    btns.data_button("🔙 Back", f"tmv {uid} home", "footer")
+    return text_msg, btns.build_menu(2)
 
 def _build_settings_mode_ui(uid: int):
     cfg = _get_tmv_cfg(uid)
@@ -1081,6 +1143,60 @@ async def tmv_callback(client, query):
     if action == "home":
         await query.answer()
         text_msg, markup = _build_home_ui(uid)
+        await edit_message(msg, text_msg, markup)
+        return
+
+    if action == "dumps":
+        await query.answer()
+        text_msg, markup = _build_dumps_ui(uid)
+        await edit_message(msg, text_msg, markup)
+        return
+
+    if action == "add_dump":
+        await query.answer()
+        val = await _wait_dm_input(
+            client,
+            uid,
+            msg,
+            "📥 <b>Add Dump Rule(s)</b>\n\n"
+            "Send one or more lines in the format: <code>name | chat_id</code>\n"
+            "• <code>. | -1001234567890</code> → sends <b>all</b> files\n"
+            "• <code>dvd | -1001234567890</code> → sends files with <code>dvd</code> in filename or caption",
+        )
+        if val is not None:
+            dumps = cfg.setdefault("dumps", [])
+            added = 0
+            for line in val.splitlines():
+                if "|" not in line:
+                    continue
+                name_part, chat_part = line.split("|", 1)
+                name_clean = name_part.strip() or "."
+                chat_clean = chat_part.strip()
+                if chat_clean:
+                    dumps.append({"name": name_clean, "chat_id": chat_clean})
+                    added += 1
+            if added:
+                await _save_tmv_cfg(uid)
+        text_msg, markup = _build_dumps_ui(uid)
+        await edit_message(msg, text_msg, markup)
+        return
+
+    if action == "del_dump" and len(data) > 3:
+        idx = int(data[3])
+        dumps = cfg.get("dumps", [])
+        if 0 <= idx < len(dumps):
+            dumps.pop(idx)
+            await _save_tmv_cfg(uid)
+        await query.answer("Dump rule removed")
+        text_msg, markup = _build_dumps_ui(uid)
+        await edit_message(msg, text_msg, markup)
+        return
+
+    if action == "clear_dumps":
+        cfg["dumps"] = []
+        await _save_tmv_cfg(uid)
+        await query.answer("All dump rules cleared")
+        text_msg, markup = _build_dumps_ui(uid)
         await edit_message(msg, text_msg, markup)
         return
 

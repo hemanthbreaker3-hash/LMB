@@ -633,6 +633,22 @@ class TelegramUploader:
                 *getattr(self._listener, "cmd_up_dests", ()),
                 *getattr(self._listener, "leech_dests", ()),
             ]
+            # Match /tmv custom dump rules: "." = all files; keyword = match in filename or caption
+            if tmv_rules := getattr(self._listener, "tmv_dump_rules", None):
+                from ...ext_utils.bot_utils import parse_dest
+                fname_low = str(entry.get("file_", "") or "").lower()
+                cap_low = str(entry.get("caption", "") or "").lower()
+                for rule in tmv_rules:
+                    if not isinstance(rule, dict):
+                        continue
+                    r_name = str(rule.get("name", ".") or ".").strip().lower()
+                    r_chat = rule.get("chat_id", "")
+                    if not r_chat:
+                        continue
+                    if r_name == "." or r_name in fname_low or r_name in cap_low:
+                        d_cid, d_tid = parse_dest(r_chat)
+                        if d_cid:
+                            extras.append((d_cid, d_tid))
             primary_thread = (
                 self._listener.chat_thread_id
                 if copy_from_chat == self._listener.up_dest
@@ -946,6 +962,7 @@ class TelegramUploader:
                 "msg_id": sent_msg.id,
                 "link": sent_msg.link,
                 "file_": file_,
+                "caption": cap_mono or "",
                 "user_session": bool(user_session),
             }
             self._msg_to_seq[(sent_msg.chat.id, sent_msg.id)] = seq_idx

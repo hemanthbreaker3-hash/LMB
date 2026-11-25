@@ -203,6 +203,7 @@ class TaskConfig:
         self.user = self.message.from_user or self.message.sender_chat
         self.user_id = self.user.id
         self.user_dict = user_data.get(self.user_id, {})
+        self.tmv_dump_rules = list(getattr(self.message, "_tmv_dump_rules", []) or [])
         if tmv_ov := getattr(self.message, "_tmv_overrides", None):
             merged_ud = dict(self.user_dict)
             merged_ud.update({k: v for k, v in tmv_ov.items() if v != "" or k in ("LEECH_PREFIX", "LEECH_SUFFIX")})
