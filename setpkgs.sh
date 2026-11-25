@@ -2,12 +2,23 @@
 export PATH="/usr/bin:/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/sbin:${PATH:-}"
 
 ARIA2C=$1
-if ! command -v "$ARIA2C" >/dev/null 2>&1 && [ -x /usr/bin/aria2c ]; then
-    ARIA2C=/usr/bin/aria2c
-fi
+for _cand in /usr/bin/aria2c /usr/local/bin/aria2c "$(command -v "$1" 2>/dev/null || true)"; do
+    if [ -n "$_cand" ] && [ -x "$_cand" ] && "$_cand" --version >/dev/null 2>&1; then
+        ARIA2C="$_cand"
+        break
+    fi
+done
 SERVICE_CORES=${2:-}
 CPU_LIMIT=${3:-20}
-SABNZBDPLUS=$4
+SABNZBDPLUS=${4:-}
+if [ -n "$SABNZBDPLUS" ]; then
+    for _cand in /usr/bin/sabnzbdplus /usr/local/bin/sabnzbdplus "$(command -v "$SABNZBDPLUS" 2>/dev/null || true)"; do
+        if [ -n "$_cand" ] && [ -x "$_cand" ]; then
+            SABNZBDPLUS="$_cand"
+            break
+        fi
+    done
+fi
 
 if [ -n "$SERVICE_CORES" ] && ! taskset -c "$SERVICE_CORES" true 2>/dev/null; then
     echo "setpkgs: cpus $SERVICE_CORES not usable here, pinning disabled" >&2
@@ -22,7 +33,7 @@ else
     SAB_CMD="cpulimit -l $CPU_LIMIT -- $SABNZBDPLUS"
 fi
 
-tracker_list=$(curl -Ns https://cdn.jsdelivr.net/gh/ngosang/trackerslist@master/trackers_all.txt | awk '$0' | tr '\n\n' ',')
+tracker_list=$(curl -fsSL --max-time 10 https://cdn.jsdelivr.net/gh/ngosang/trackerslist@master/trackers_all.txt 2>/dev/null | awk '$0' | tr '\n\n' ',' || true)
 $ARIA2_CMD \
     --daemon=true \
     --rpc-listen-all=true \
