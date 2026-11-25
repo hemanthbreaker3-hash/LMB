@@ -134,7 +134,10 @@ class DbManager:
 
     @_safe_db()
     async def update_deploy_config(self):
-        settings = import_module("config")
+        try:
+            settings = import_module("config")
+        except ModuleNotFoundError:
+            return
         config_file = {
             key: value.strip() if isinstance(value, str) else value
             for key, value in vars(settings).items()

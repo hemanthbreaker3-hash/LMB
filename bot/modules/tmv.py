@@ -1087,8 +1087,8 @@ def _build_settings_mode_ui(uid: int):
         f"<b>⚙️ /tmv Settings Mode</b>\n\n"
         f"<blockquote>"
         f"• <b>Active Mode:</b> <b>{'Independent' if mode == 'independent' else 'User Settings'}</b>\n\n"
-        f"• <b>Independent:</b> Configure dedicated upload destination (Telegram / Mirror / Uphoster), dump chat, thumbnail, document/media, and caption settings just for <code>/tmv</code>.\n"
-        f"• <b>User Settings:</b> Automatically apply your main <code>/{BotCommands.UserSetCommand[0]}</code> configuration for all <code>/tmv</code> tasks."
+        f"• <b>Independent:</b> Configure a complete, isolated set of settings (Leech, Mirror, Uphoster, Video Tools, FFmpeg, Metadata, and more) dedicated to <code>/tmv</code>.\n"
+        f"• <b>User Settings:</b> Automatically use your main <code>/{BotCommands.UserSetCommand[0]}</code> configuration for all <code>/tmv</code> tasks."
         f"</blockquote>"
     )
     btns = ButtonMaker()
@@ -1157,7 +1157,7 @@ def _build_updest_ui(uid: int):
     btns.data_button("☁️ Mirror (GDrive/Rclone)", f"tmv {uid} set_updest mirror")
     btns.data_button("🌐 Uphoster (DDL)", f"tmv {uid} set_updest uphoster")
     btns.data_button("✏️ Custom (-up Target)", f"tmv {uid} ind_updest_custom")
-    btns.data_button("🔙 Back", f"tmv {uid} mode independent", "footer")
+    btns.data_button("🔙 Back", f"tmvset {uid} back main", "footer")
     return text_msg, btns.build_menu(2)
 
 
@@ -1310,9 +1310,9 @@ async def tmv_callback(client, query):
         cfg["settings_mode"] = target_mode
         await _save_tmv_cfg(uid)
         if target_mode == "independent":
-            await query.answer("Independent mode selected!")
-            text_msg, markup = _build_independent_ui(uid)
-            await edit_message(msg, text_msg, markup)
+            from .users_settings import open_tmv_independent_settings
+            await query.answer("Independent mode enabled!")
+            await open_tmv_independent_settings(query)
         else:
             await query.answer("User Settings mode enabled for /tmv!", show_alert=True)
             text_msg, markup = _build_settings_mode_ui(uid)
@@ -1491,5 +1491,5 @@ async def tmv_callback(client, query):
         await _save_tmv_cfg(uid)
         await query.answer("Independent settings reset!")
 
-    text_msg, markup = _build_independent_ui(uid)
-    await edit_message(msg, text_msg, markup)
+    from .users_settings import open_tmv_independent_settings
+    await open_tmv_independent_settings(query)

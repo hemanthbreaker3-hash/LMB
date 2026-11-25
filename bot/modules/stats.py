@@ -51,7 +51,7 @@ commands = {
     "qBittorrent": ([BinConfig.QBIT_NAME, "--version"], r"qBittorrent v([\d.]+)"),
     "SABnzbd+": (
         [BinConfig.SABNZBD_NAME, "--version"],
-        rf"{BinConfig.SABNZBD_NAME}-([\d.]+)",
+        rf"{BinConfig.SABNZBD_NAME}-([\d.]+(?:\s*(?:RC|rc|alpha|beta)\d*)?)",
     ),
     "python": (["python3", "--version"], r"Python ([\d.]+)"),
     "rclone": ([BinConfig.RCLONE_NAME, "--version"], r"rclone v([\d.]+)"),
@@ -205,16 +205,16 @@ async def get_stats(event, key="home"):
 
 <blockquote>• <b>Python:</b> v{get_v("python", "3.12.3")}
 • <b>Aria2:</b> v{get_v("aria2", "1.37.0")}
-• <b>qBittorrent:</b> v{get_v("qBittorrent", "5.2.3")}
-• <b>SABnzbd+:</b> v{get_v("SABnzbd+", "4.2.2")}
-• <b>Rclone:</b> v{get_v("rclone", "1.75.1")}
-• <b>yt-dlp:</b> v{get_v("yt-dlp", "2026.08.19")}
-• <b>FFmpeg:</b> v{get_v("ffmpeg", "9.0.2")}
-• <b>7-Zip:</b> v{get_v("7z", "26.03")}
-• <b>Aiohttp:</b> v{get_v("aiohttp", "3.14.3")}
-• <b>CBGram:</b> v{get_v("cbgram", "1.0.0")}
-• <b>Google API:</b> v{get_v("gapi", "2.201.0")}
-• <b>MegaSDK:</b> v{get_v("mega", "10.20.0")}</blockquote>
+• <b>qBittorrent:</b> v{get_v("qBittorrent", "5.3.1")}
+• <b>SABnzbd+:</b> v{get_v("SABnzbd+", "5.2.0 RC2")}
+• <b>Rclone:</b> v{get_v("rclone", "1.60.1")}
+• <b>yt-dlp:</b> v{get_v("yt-dlp", "2026.11.23")}
+• <b>FFmpeg:</b> v{get_v("ffmpeg", "9.1")}
+• <b>7-Zip:</b> v{get_v("7z", "26.06")}
+• <b>Aiohttp:</b> v{get_v("aiohttp", "3.14.5")}
+• <b>CBGram:</b> v{get_v("cbgram", "3.1.7")}
+• <b>Google API:</b> v{get_v("gapi", "2.202.0")}
+• <b>MegaSDK:</b> v{get_v("mega", "10.20.20")}</blockquote>
 """
     elif key == "tlimits":
         msg = f"""<b>🛑 Bot Task Configuration & Limits</b>

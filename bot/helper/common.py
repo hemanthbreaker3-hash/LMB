@@ -207,7 +207,10 @@ class TaskConfig:
         self.tmv_auto_extract = bool(getattr(self.message, "_tmv_auto_extract", False))
         if tmv_ov := getattr(self.message, "_tmv_overrides", None):
             merged_ud = dict(self.user_dict)
-            merged_ud.update({k: v for k, v in tmv_ov.items() if v != "" or k in ("LEECH_PREFIX", "LEECH_SUFFIX")})
+            for k, v in tmv_ov.items():
+                if k == "UPLOAD_DEST":
+                    continue
+                merged_ud[k] = v
             self.user_dict = merged_ud
         self.metadata_processor = MetadataProcessor()
         set_all_meta = self.user_dict.get("SET_ALL_METADATA_ENABLE", False) and self.user_dict.get(

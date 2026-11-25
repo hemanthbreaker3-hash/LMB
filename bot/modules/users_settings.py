@@ -1,4 +1,5 @@
 from asyncio import sleep
+from contextvars import ContextVar
 from ast import literal_eval
 from pyrogram.enums import ButtonStyle
 from functools import partial
@@ -65,6 +66,34 @@ from ..helper.telegram_helper.message_utils import (
 )
 
 handler_dict = {}
+_TMV_IND_CTX: ContextVar[bool] = ContextVar("_TMV_IND_CTX", default=False)
+
+
+def _is_tmv_scope() -> bool:
+    return bool(_TMV_IND_CTX.get())
+
+
+def _cb_prefix() -> str:
+    return "tmvset" if _is_tmv_scope() else "userset"
+
+
+def _get_ud(user_id: int) -> dict:
+    if _is_tmv_scope():
+        ud = user_data.setdefault(user_id, {})
+        tmv_cfg = ud.setdefault("TMV_SETTINGS", {})
+        ind = tmv_cfg.setdefault("independent", {})
+        return ind
+    return _get_ud(user_id)
+
+
+def _set_ud(user_id: int, key: str, value):
+    if _is_tmv_scope():
+        ud = user_data.setdefault(user_id, {})
+        tmv_cfg = ud.setdefault("TMV_SETTINGS", {})
+        ind = tmv_cfg.setdefault("independent", {})
+        ind[key] = value
+    else:
+        _set_ud(user_id, key, value)
 
 
 
@@ -563,27 +592,29 @@ async def get_user_settings(from_user, stype="main"):
     user_id = from_user.id
     user_name = from_user.mention(style="html")
     buttons = ButtonMaker()
-    rclone_conf = f"rclone/{user_id}.conf"
-    token_pickle = f"tokens/{user_id}.pickle"
-    user_dict = user_data.get(user_id, {})
+    is_tmv = _is_tmv_scope()
+    file_tag = f"tmv_{user_id}" if is_tmv else f"{user_id}"
+    rclone_conf = f"rclone/{file_tag}.conf"
+    token_pickle = f"tokens/{file_tag}.pickle"
+    user_dict = _get_ud(user_id)
     auto_thumb = "Disabled"
 
     if stype == "main":
         buttons.data_button(
-            "⚙️ General Settings", f"userset {user_id} general", position="header"
+            "⚙️ General Settings", f"{_cb_prefix()} {user_id} general", position="header"
         )
-        buttons.data_button("☁️ Mirror Settings", f"userset {user_id} mirror")
-        buttons.data_button("📦 Leech Settings", f"userset {user_id} leech")
-        buttons.data_button("🎬 ENC & COM & WATERMARK", f"userset {user_id} enc_com_wm")
-        buttons.data_button("🎬 Video Tools", f"userset {user_id} vtools")
-        buttons.data_button("🌐 Uphoster Settings", f"userset {user_id} uphoster")
-        buttons.data_button("🎞️ FF Media Settings", f"userset {user_id} ffset")
+        buttons.data_button("☁️ Mirror Settings", f"{_cb_prefix()} {user_id} mirror")
+        buttons.data_button("📦 Leech Settings", f"{_cb_prefix()} {user_id} leech")
+        buttons.data_button("🎬 ENC & COM & WATERMARK", f"{_cb_prefix()} {user_id} enc_com_wm")
+        buttons.data_button("🎬 Video Tools", f"{_cb_prefix()} {user_id} vtools")
+        buttons.data_button("🌐 Uphoster Settings", f"{_cb_prefix()} {user_id} uphoster")
+        buttons.data_button("🎞️ FF Media Settings", f"{_cb_prefix()} {user_id} ffset")
         buttons.data_button(
-            "🛠️ Misc Settings", f"userset {user_id} advanced", position="l_body"
+            "🛠️ Misc Settings", f"{_cb_prefix()} {user_id} advanced", position="l_body"
         )
 
-        buttons.data_button("📤 Export Settings", f"userset {user_id} export_settings", position="footer")
-        buttons.data_button("📥 Import Settings", f"userset {user_id} import_settings", position="footer")
+        buttons.data_button("📤 Export Settings", f"{_cb_prefix()} {user_id} export_settings", position="footer")
+        buttons.data_button("📥 Import Settings", f"{_cb_prefix()} {user_id} import_settings", position="footer")
 
         if user_dict and any(
             key in user_dict
@@ -606,16 +637,33 @@ async def get_user_settings(from_user, stype="main"):
             ]
         ):
             buttons.data_button(
-                "♻️ Reset All", f"userset {user_id} confirm_reset_all", position="footer"
+                "♻️ Reset All", f"{_cb_prefix()} {user_id} confirm_reset_all", position="footer"
             )
+        if is_tmv:
+            buttons.data_button("📤 Upload Dest", f"tmv {user_id} ind_updest", position="footer")
+            buttons.data_button("🔗 Link Filter", f"tmv {user_id} ind_filter", position="footer")
+            buttons.data_button("⏱️ Interval", f"tmv {user_id} ind_interval", position="footer")
+            buttons.data_button("🔙 Back to /tmv", f"tmv {user_id} settings", position="footer")
         buttons.data_button(
             "❌ Close",
-            f"userset {user_id} close",
+            f"{_cb_prefix()} {user_id} close",
             position="footer",
             style=ButtonStyle.DANGER,
         )
 
-        text = f"""<b>👤 User Personal Settings</b>
+        if is_tmv:
+            tmv_cfg = user_data.get(user_id, {}).get("TMV_SETTINGS", {})
+            up_dest = user_dict.get("UPLOAD_DEST", "telegram")
+            dl_mode = str(tmv_cfg.get("download_mode", "all")).upper()
+            interval = int(tmv_cfg.get("interval", 360) or 360)
+            text = f"""<b>🎛️ /tmv Independent Settings</b>
+
+<blockquote>• <b>Upload Destination:</b> <code>{escape(str(up_dest))}</code>
+• <b>Link Filter:</b> <code>{dl_mode}</code>
+• <b>Check Interval:</b> <code>{interval}s</code>
+• <b>Scope:</b> Isolated from your main <code>/uset</code> configuration</blockquote>"""
+        else:
+            text = f"""<b>👤 User Personal Settings</b>
 
 <blockquote>• <b>Name:</b> {user_name}
 • <b>User ID:</b> <code>#ID{user_id}</code>
@@ -633,7 +681,7 @@ async def get_user_settings(from_user, stype="main"):
         du = "GDRIVE API" if default_upload == "gd" else "RCLONE"
         dur = "GDRIVE API" if default_upload != "gd" else "RCLONE"
         buttons.data_button(
-            f"Swap to {dur} Mode", f"userset {user_id} {default_upload}"
+            f"Swap to {dur} Mode", f"{_cb_prefix()} {user_id} {default_upload}"
         )
 
         user_tokens = user_dict.get("USER_TOKENS", False)
@@ -641,19 +689,19 @@ async def get_user_settings(from_user, stype="main"):
         trr = "OWNER" if user_tokens else "USER"
         buttons.data_button(
             f"Swap to {trr} token/config",
-            f"userset {user_id} tog USER_TOKENS {'f' if user_tokens else 't'}",
+            f"{_cb_prefix()} {user_id} tog USER_TOKENS {'f' if user_tokens else 't'}",
         )
 
-        buttons.data_button("◀️ Back", f"userset {user_id} back", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
 
         def_cookies = user_dict.get("USE_DEFAULT_COOKIE", False)
         cookie_mode = "Owner's Cookie" if def_cookies else "User's Cookie"
         buttons.data_button(
             f"Swap to {'OWNER' if not def_cookies else 'USER'}'s Cookie File",
-            f"userset {user_id} tog USE_DEFAULT_COOKIE {'f' if def_cookies else 't'}",
+            f"{_cb_prefix()} {user_id} tog USE_DEFAULT_COOKIE {'f' if def_cookies else 't'}",
         )
         btns = buttons.build_menu(2)
 
@@ -667,14 +715,14 @@ async def get_user_settings(from_user, stype="main"):
     elif stype == "leech":
         # Quick metadata action: users can set the same value for every supported
         # metadata field without opening FFmpeg & Media Metadata Settings.
-        buttons.data_button("📝 Set Same Metadata Value for All Fields", f"userset {user_id} metafill SET_ALL_METADATA leech", position="header")
+        buttons.data_button("📝 Set Same Metadata Value for All Fields", f"{_cb_prefix()} {user_id} metafill SET_ALL_METADATA leech", position="header")
         thumbpath = f"thumbnails/{user_id}.jpg"
         has_thumb = await aiopath.exists(thumbpath)
         thumb_mode = user_dict.get("THUMBNAIL_MODE") or ("custom" if has_thumb else "auto")
-        buttons.data_button("Thumbnail", f"userset {user_id} thumb_select")
+        buttons.data_button("Thumbnail", f"{_cb_prefix()} {user_id} thumb_select")
         thumbmsg = f"{thumb_mode.title()} ({'Exists' if has_thumb else 'Not Exists'})"
         buttons.data_button(
-            "Leech Split Size", f"userset {user_id} menu LEECH_SPLIT_SIZE"
+            "Leech Split Size", f"{_cb_prefix()} {user_id} menu LEECH_SPLIT_SIZE"
         )
         user_max_split = TgClient.max_split_size_for_user(user_id, user_dict)
         if user_dict.get("LEECH_SPLIT_SIZE", False):
@@ -692,20 +740,20 @@ async def get_user_settings(from_user, stype="main"):
                 else Config.LEECH_SPLIT_SIZE
             )
         buttons.data_button(
-            "Leech Dump Chats", f"userset {user_id} menu LEECH_DUMP_CHATS"
+            "Leech Dump Chats", f"{_cb_prefix()} {user_id} menu LEECH_DUMP_CHATS"
         )
         my_dumps = user_dict.get("LEECH_DUMP_CHATS") or {}
         leech_dest = ", ".join(my_dumps) if my_dumps else "None"
         if extra := len(set(Config.LEECH_DUMP_CHATS or {}) - set(my_dumps)):
             leech_dest += f" (+{extra} owner named)"
-        buttons.data_button("Leech Prefix", f"userset {user_id} menu LEECH_PREFIX")
+        buttons.data_button("Leech Prefix", f"{_cb_prefix()} {user_id} menu LEECH_PREFIX")
         if user_dict.get("LEECH_PREFIX", False):
             lprefix = user_dict["LEECH_PREFIX"]
         elif "LEECH_PREFIX" not in user_dict and Config.LEECH_PREFIX:
             lprefix = Config.LEECH_PREFIX
         else:
             lprefix = "Not Exists"
-        buttons.data_button("Leech Suffix", f"userset {user_id} menu LEECH_SUFFIX")
+        buttons.data_button("Leech Suffix", f"{_cb_prefix()} {user_id} menu LEECH_SUFFIX")
         if user_dict.get("LEECH_SUFFIX", False):
             lsuffix = user_dict["LEECH_SUFFIX"]
         elif "LEECH_SUFFIX" not in user_dict and Config.LEECH_SUFFIX:
@@ -713,7 +761,7 @@ async def get_user_settings(from_user, stype="main"):
         else:
             lsuffix = "Not Exists"
 
-        buttons.data_button("Leech Caption", f"userset {user_id} menu LEECH_CAPTION")
+        buttons.data_button("Leech Caption", f"{_cb_prefix()} {user_id} menu LEECH_CAPTION")
         if user_dict.get("LEECH_CAPTION", False):
             lcap = user_dict["LEECH_CAPTION"]
         elif "LEECH_CAPTION" not in user_dict and Config.LEECH_CAPTION:
@@ -721,7 +769,7 @@ async def get_user_settings(from_user, stype="main"):
         else:
             lcap = "Not Exists"
 
-        buttons.data_button("Caption Font", f"userset {user_id} lfont")
+        buttons.data_button("Caption Font", f"{_cb_prefix()} {user_id} lfont")
         if "LEECH_FONT" in user_dict:
             lfont = user_dict["LEECH_FONT"] or "none"
         elif Config.LEECH_FONT:
@@ -735,11 +783,11 @@ async def get_user_settings(from_user, stype="main"):
             and Config.AS_DOCUMENT
         ):
             ltype = "DOCUMENT"
-            buttons.data_button("Send As Media", f"userset {user_id} tog AS_DOCUMENT f")
+            buttons.data_button("Send As Media", f"{_cb_prefix()} {user_id} tog AS_DOCUMENT f")
         else:
             ltype = "MEDIA"
             buttons.data_button(
-                "Send As Document", f"userset {user_id} tog AS_DOCUMENT t"
+                "Send As Document", f"{_cb_prefix()} {user_id} tog AS_DOCUMENT t"
             )
         if (
             user_dict.get("EQUAL_SPLITS", False)
@@ -747,12 +795,12 @@ async def get_user_settings(from_user, stype="main"):
             and Config.EQUAL_SPLITS
         ):
             buttons.data_button(
-                "Disable Equal Splits", f"userset {user_id} tog EQUAL_SPLITS f"
+                "Disable Equal Splits", f"{_cb_prefix()} {user_id} tog EQUAL_SPLITS f"
             )
             equal_splits = "Enabled"
         else:
             buttons.data_button(
-                "Enable Equal Splits", f"userset {user_id} tog EQUAL_SPLITS t"
+                "Enable Equal Splits", f"{_cb_prefix()} {user_id} tog EQUAL_SPLITS t"
             )
             equal_splits = "Disabled"
         if (
@@ -761,16 +809,16 @@ async def get_user_settings(from_user, stype="main"):
             and Config.MEDIA_GROUP
         ):
             buttons.data_button(
-                "Disable Media Group", f"userset {user_id} tog MEDIA_GROUP f"
+                "Disable Media Group", f"{_cb_prefix()} {user_id} tog MEDIA_GROUP f"
             )
             media_group = "Enabled"
         else:
             buttons.data_button(
-                "Enable Media Group", f"userset {user_id} tog MEDIA_GROUP t"
+                "Enable Media Group", f"{_cb_prefix()} {user_id} tog MEDIA_GROUP t"
             )
             media_group = "Disabled"
         buttons.data_button(
-            "Thumbnail Layout", f"userset {user_id} menu THUMBNAIL_LAYOUT"
+            "Thumbnail Layout", f"{_cb_prefix()} {user_id} menu THUMBNAIL_LAYOUT"
         )
         if user_dict.get("THUMBNAIL_LAYOUT", False):
             thumb_layout = user_dict["THUMBNAIL_LAYOUT"]
@@ -783,19 +831,19 @@ async def get_user_settings(from_user, stype="main"):
         next_split_mode = "number" if split_mode == "part" else "part"
         buttons.data_button(
             f"Split Mode: {split_mode.capitalize()}",
-            f"userset {user_id} split_mode {next_split_mode}",
+            f"{_cb_prefix()} {user_id} split_mode {next_split_mode}",
         )
 
         sequence_enabled = user_dict.get("LEECH_SEQUENCE", False)
         buttons.data_button(
             f"Sequence: {'✓ ON' if sequence_enabled else 'OFF'}",
-            f"userset {user_id} tog LEECH_SEQUENCE {'f' if sequence_enabled else 't'} leech",
+            f"{_cb_prefix()} {user_id} tog LEECH_SEQUENCE {'f' if sequence_enabled else 't'} leech",
         )
 
         auto_leech = user_dict.get("AUTO_LEECH", False)
         buttons.data_button(
             f"Auto Leech: {'✓ ON' if auto_leech else 'OFF'}",
-            f"userset {user_id} tog AUTO_LEECH {'f' if auto_leech else 't'} leech",
+            f"{_cb_prefix()} {user_id} tog AUTO_LEECH {'f' if auto_leech else 't'} leech",
         )
 
         thumb_mode_val = user_dict.get("THUMBNAIL_MODE")
@@ -804,9 +852,9 @@ async def get_user_settings(from_user, stype="main"):
         else:
             auto_thumb = "Disabled"
 
-        buttons.data_button("◀️ Back", f"userset {user_id} back", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(2)
 
@@ -838,27 +886,27 @@ async def get_user_settings(from_user, stype="main"):
         r_state = "✓ " if cur_mode == "random" else ""
         n_state = "✓ " if cur_mode == "none" else ""
 
-        buttons.data_button(f"{a_state}Auto Thumbnail", f"userset {user_id} thumb_mode auto")
-        buttons.data_button(f"{c_state}Custom Thumbnail", f"userset {user_id} thumb_mode custom")
-        buttons.data_button(f"{r_state}Random Thumbnail", f"userset {user_id} thumb_mode random")
-        buttons.data_button(f"{n_state}No Thumbnail", f"userset {user_id} thumb_mode none")
+        buttons.data_button(f"{a_state}Auto Thumbnail", f"{_cb_prefix()} {user_id} thumb_mode auto")
+        buttons.data_button(f"{c_state}Custom Thumbnail", f"{_cb_prefix()} {user_id} thumb_mode custom")
+        buttons.data_button(f"{r_state}Random Thumbnail", f"{_cb_prefix()} {user_id} thumb_mode random")
+        buttons.data_button(f"{n_state}No Thumbnail", f"{_cb_prefix()} {user_id} thumb_mode none")
 
         hd_state = "✓ " if user_dict.get("HD_THUMBNAIL", False) else ""
-        buttons.data_button(f"✨ {hd_state}HD Thumbnail", f"userset {user_id} thumb_hd")
-        buttons.data_button("🖼️ Thumbnail Watermark", f"userset {user_id} thumb_wm_menu")
+        buttons.data_button(f"✨ {hd_state}HD Thumbnail", f"{_cb_prefix()} {user_id} thumb_hd")
+        buttons.data_button("🖼️ Thumbnail Watermark", f"{_cb_prefix()} {user_id} thumb_wm_menu")
 
         if has_thumb:
-            buttons.data_button("👁️ View Thumb", f"userset {user_id} view THUMBNAIL", "header")
-            buttons.data_button("📤 Upload Photo / Doc / Link", f"userset {user_id} file THUMBNAIL")
-            buttons.data_button("🔗 Set Image Link", f"userset {user_id} set THUMBNAIL")
-            buttons.data_button("🗑️ Remove Thumb", f"userset {user_id} remove THUMBNAIL")
+            buttons.data_button("👁️ View Thumb", f"{_cb_prefix()} {user_id} view THUMBNAIL", "header")
+            buttons.data_button("📤 Upload Photo / Doc / Link", f"{_cb_prefix()} {user_id} file THUMBNAIL")
+            buttons.data_button("🔗 Set Image Link", f"{_cb_prefix()} {user_id} set THUMBNAIL")
+            buttons.data_button("🗑️ Remove Thumb", f"{_cb_prefix()} {user_id} remove THUMBNAIL")
         else:
-            buttons.data_button("📤 Set Thumb (Photo / Doc / Link)", f"userset {user_id} file THUMBNAIL", "header")
-            buttons.data_button("🔗 Set Thumb via Image Link", f"userset {user_id} set THUMBNAIL", "header")
+            buttons.data_button("📤 Set Thumb (Photo / Doc / Link)", f"{_cb_prefix()} {user_id} file THUMBNAIL", "header")
+            buttons.data_button("🔗 Set Thumb via Image Link", f"{_cb_prefix()} {user_id} set THUMBNAIL", "header")
 
-        buttons.data_button("◀️ Back", f"userset {user_id} leech", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} leech", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
 
         thumb_status = "Exists" if has_thumb else "Not Configured"
@@ -879,15 +927,15 @@ Select thumbnail option for Telegram uploads:"""
         wm_img_pos = user_dict.get("THUMB_WM_IMAGE_POSITION") or user_dict.get("THUMB_WM_POSITION") or user_dict.get("WM_IMAGE_POSITION") or user_dict.get("WM_POSITION") or "Top-Left"
         wm_text_pos = user_dict.get("THUMB_WM_TEXT_POSITION") or user_dict.get("THUMB_WM_POSITION") or user_dict.get("WM_TEXT_POSITION") or user_dict.get("WM_POSITION") or "Top-Left"
 
-        buttons.data_button("Watermark Text", f"userset {user_id} menu THUMB_WM_TEXT")
-        buttons.data_button("Watermark Size", f"userset {user_id} menu THUMB_WM_SIZE")
-        buttons.data_button("Photo / Image", f"userset {user_id} file THUMB_WM_IMAGE")
-        buttons.data_button("🎨 Text Color", f"userset {user_id} thumb_wm_color_select")
-        buttons.data_button("🖼️ Image Position", f"userset {user_id} thumb_wm_img_pos_select")
-        buttons.data_button("📝 Text Position", f"userset {user_id} thumb_wm_text_pos_select")
+        buttons.data_button("Watermark Text", f"{_cb_prefix()} {user_id} menu THUMB_WM_TEXT")
+        buttons.data_button("Watermark Size", f"{_cb_prefix()} {user_id} menu THUMB_WM_SIZE")
+        buttons.data_button("Photo / Image", f"{_cb_prefix()} {user_id} file THUMB_WM_IMAGE")
+        buttons.data_button("🎨 Text Color", f"{_cb_prefix()} {user_id} thumb_wm_color_select")
+        buttons.data_button("🖼️ Image Position", f"{_cb_prefix()} {user_id} thumb_wm_img_pos_select")
+        buttons.data_button("📝 Text Position", f"{_cb_prefix()} {user_id} thumb_wm_text_pos_select")
 
-        buttons.data_button("◀️ Back", f"userset {user_id} thumb_select", "footer")
-        buttons.data_button("❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} thumb_select", "footer")
+        buttons.data_button("❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER)
 
         text = f"""<b>🖼️ Thumbnail Watermark Settings</b>
 
@@ -905,12 +953,12 @@ Select thumbnail option for Telegram uploads:"""
         com_enabled = user_dict.get("ENABLE_COMPRESS") if "ENABLE_COMPRESS" in user_dict else Config.ENABLE_COMPRESS
         wm_enabled = user_dict.get("ENABLE_WATERMARK") if "ENABLE_WATERMARK" in user_dict else Config.ENABLE_WATERMARK
 
-        buttons.data_button(f"🎞️ Encode: {'ON' if enc_enabled else 'OFF'}", f"userset {user_id} encode_menu")
-        buttons.data_button(f"🗜️ Compress: {'ON' if com_enabled else 'OFF'}", f"userset {user_id} compress_menu")
-        buttons.data_button(f"🖼️ Watermark: {'ON' if wm_enabled else 'OFF'}", f"userset {user_id} watermark_menu")
-        buttons.data_button("◀️ Back", f"userset {user_id} back", "footer")
+        buttons.data_button(f"🎞️ Encode: {'ON' if enc_enabled else 'OFF'}", f"{_cb_prefix()} {user_id} encode_menu")
+        buttons.data_button(f"🗜️ Compress: {'ON' if com_enabled else 'OFF'}", f"{_cb_prefix()} {user_id} compress_menu")
+        buttons.data_button(f"🖼️ Watermark: {'ON' if wm_enabled else 'OFF'}", f"{_cb_prefix()} {user_id} watermark_menu")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(1)
 
@@ -927,19 +975,19 @@ Configure custom video encoding, compression, and watermark overlays for uploads
         enc_enabled = user_dict.get("ENABLE_ENCODE") if "ENABLE_ENCODE" in user_dict else Config.ENABLE_ENCODE
         buttons.data_button(
             f"Encode Feature: {'ON' if enc_enabled else 'OFF'}",
-            f"userset {user_id} tog ENABLE_ENCODE {'f' if enc_enabled else 't'}",
+            f"{_cb_prefix()} {user_id} tog ENABLE_ENCODE {'f' if enc_enabled else 't'}",
             position="header",
         )
-        buttons.data_button("Quality", f"userset {user_id} menu ENC_QUALITY")
-        buttons.data_button("CRF", f"userset {user_id} menu ENC_CRF")
-        buttons.data_button("Preset", f"userset {user_id} menu ENC_PRESET")
-        buttons.data_button("Codec", f"userset {user_id} menu ENC_CODEC")
-        buttons.data_button("Resolution", f"userset {user_id} menu ENC_RESOLUTION")
-        buttons.data_button("FPS", f"userset {user_id} menu ENC_FPS")
+        buttons.data_button("Quality", f"{_cb_prefix()} {user_id} menu ENC_QUALITY")
+        buttons.data_button("CRF", f"{_cb_prefix()} {user_id} menu ENC_CRF")
+        buttons.data_button("Preset", f"{_cb_prefix()} {user_id} menu ENC_PRESET")
+        buttons.data_button("Codec", f"{_cb_prefix()} {user_id} menu ENC_CODEC")
+        buttons.data_button("Resolution", f"{_cb_prefix()} {user_id} menu ENC_RESOLUTION")
+        buttons.data_button("FPS", f"{_cb_prefix()} {user_id} menu ENC_FPS")
 
-        buttons.data_button("◀️ Back", f"userset {user_id} enc_com_wm", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} enc_com_wm", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(2)
 
@@ -965,18 +1013,18 @@ Configure custom video encoding, compression, and watermark overlays for uploads
         com_enabled = user_dict.get("ENABLE_COMPRESS") if "ENABLE_COMPRESS" in user_dict else Config.ENABLE_COMPRESS
         buttons.data_button(
             f"Compress Feature: {'ON' if com_enabled else 'OFF'}",
-            f"userset {user_id} tog ENABLE_COMPRESS {'f' if com_enabled else 't'}",
+            f"{_cb_prefix()} {user_id} tog ENABLE_COMPRESS {'f' if com_enabled else 't'}",
             position="header",
         )
-        buttons.data_button("Quality", f"userset {user_id} menu COM_QUALITY")
-        buttons.data_button("CRF", f"userset {user_id} menu COM_CRF")
-        buttons.data_button("Preset", f"userset {user_id} menu COM_PRESET")
-        buttons.data_button("Audio Bitrate", f"userset {user_id} menu COM_AUDIO_BITRATE")
-        buttons.data_button("Audio Codec", f"userset {user_id} menu COM_AUDIO_CODEC")
+        buttons.data_button("Quality", f"{_cb_prefix()} {user_id} menu COM_QUALITY")
+        buttons.data_button("CRF", f"{_cb_prefix()} {user_id} menu COM_CRF")
+        buttons.data_button("Preset", f"{_cb_prefix()} {user_id} menu COM_PRESET")
+        buttons.data_button("Audio Bitrate", f"{_cb_prefix()} {user_id} menu COM_AUDIO_BITRATE")
+        buttons.data_button("Audio Codec", f"{_cb_prefix()} {user_id} menu COM_AUDIO_CODEC")
 
-        buttons.data_button("◀️ Back", f"userset {user_id} enc_com_wm", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} enc_com_wm", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(2)
 
@@ -1000,16 +1048,16 @@ Configure custom video encoding, compression, and watermark overlays for uploads
         wm_enabled = user_dict.get("ENABLE_WATERMARK") if "ENABLE_WATERMARK" in user_dict else Config.ENABLE_WATERMARK
         buttons.data_button(
             f"Watermark Feature: {'ON' if wm_enabled else 'OFF'}",
-            f"userset {user_id} tog ENABLE_WATERMARK {'f' if wm_enabled else 't'}",
+            f"{_cb_prefix()} {user_id} tog ENABLE_WATERMARK {'f' if wm_enabled else 't'}",
             position="header",
         )
-        buttons.data_button("Username", f"userset {user_id} menu WM_USERNAME")
-        buttons.data_button("Text", f"userset {user_id} menu WM_TEXT")
-        buttons.data_button("Photo / Image URL", f"userset {user_id} file WM_IMAGE")
-        buttons.data_button("Size / Scale", f"userset {user_id} menu WM_SIZE")
-        buttons.data_button("🎨 Text Color", f"userset {user_id} wm_color_select")
-        buttons.data_button("🖼️ Image Position", f"userset {user_id} wm_img_pos_select")
-        buttons.data_button("📝 Text Position", f"userset {user_id} wm_text_pos_select")
+        buttons.data_button("Username", f"{_cb_prefix()} {user_id} menu WM_USERNAME")
+        buttons.data_button("Text", f"{_cb_prefix()} {user_id} menu WM_TEXT")
+        buttons.data_button("Photo / Image URL", f"{_cb_prefix()} {user_id} file WM_IMAGE")
+        buttons.data_button("Size / Scale", f"{_cb_prefix()} {user_id} menu WM_SIZE")
+        buttons.data_button("🎨 Text Color", f"{_cb_prefix()} {user_id} wm_color_select")
+        buttons.data_button("🖼️ Image Position", f"{_cb_prefix()} {user_id} wm_img_pos_select")
+        buttons.data_button("📝 Text Position", f"{_cb_prefix()} {user_id} wm_text_pos_select")
 
         wm_user = user_dict.get("WM_USERNAME")
         wm_text = user_dict.get("WM_TEXT")
@@ -1019,9 +1067,9 @@ Configure custom video encoding, compression, and watermark overlays for uploads
         wm_img_pos = user_dict.get("WM_IMAGE_POSITION") or user_dict.get("WM_POSITION") or "Top-Left"
         wm_text_pos = user_dict.get("WM_TEXT_POSITION") or user_dict.get("WM_POSITION") or "Top-Left"
 
-        buttons.data_button("◀️ Back", f"userset {user_id} enc_com_wm", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} enc_com_wm", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(2)
 
@@ -1045,7 +1093,7 @@ Configure custom video encoding, compression, and watermark overlays for uploads
         )
         buttons.data_button(
             f"💬 Intro Subtitle: {'✓ ON' if intro_sub_enabled else 'OFF'}",
-            f"userset {user_id} intro_sub_menu",
+            f"{_cb_prefix()} {user_id} intro_sub_menu",
             position="header",
         )
         auto_merge = user_dict.get("AUTO_MERGE", False) or (
@@ -1053,7 +1101,7 @@ Configure custom video encoding, compression, and watermark overlays for uploads
         )
         buttons.data_button(
             f"Auto Merge: {'✓ ON' if auto_merge else 'OFF'}",
-            f"userset {user_id} tog AUTO_MERGE {'f' if auto_merge else 't'} vtools",
+            f"{_cb_prefix()} {user_id} tog AUTO_MERGE {'f' if auto_merge else 't'} vtools",
             position="header",
         )
 
@@ -1061,47 +1109,47 @@ Configure custom video encoding, compression, and watermark overlays for uploads
         if auto_merge:
             n_st = "✓ " if merge_mode == "normal" else ""
             a_st = "✓ " if merge_mode == "advanced" else ""
-            buttons.data_button(f"{n_st}Normal Mode", f"userset {user_id} set_merge_mode normal")
-            buttons.data_button(f"{a_st}Advanced Mode", f"userset {user_id} set_merge_mode advanced")
+            buttons.data_button(f"{n_st}Normal Mode", f"{_cb_prefix()} {user_id} set_merge_mode normal")
+            buttons.data_button(f"{a_st}Advanced Mode", f"{_cb_prefix()} {user_id} set_merge_mode advanced")
 
         save_files = user_dict.get("SAVE_FILES", False)
         buttons.data_button(
             f"Keep Original Files: {'✓ ON' if save_files else 'OFF'}",
-            f"userset {user_id} tog SAVE_FILES {'f' if save_files else 't'} vtools",
+            f"{_cb_prefix()} {user_id} tog SAVE_FILES {'f' if save_files else 't'} vtools",
         )
 
         audio_split_enabled = bool(user_dict.get("AUDIO_SPLIT_ENABLED", False))
         audio_split_languages = user_dict.get("AUDIO_SPLIT_LANGUAGES", "") or "Not configured"
         buttons.data_button(
             f"Audio Split on Incoming Tasks: {'✓ ON' if audio_split_enabled else 'OFF'}",
-            f"userset {user_id} tog_audio_split",
+            f"{_cb_prefix()} {user_id} tog_audio_split",
         )
         split_mode = str(user_dict.get("AUDIO_SPLIT_MODE", "auto")).lower()
         split_mode = "manual" if split_mode == "manual" else "auto"
         buttons.data_button(
             f"{'✓ ' if split_mode == 'auto' else ''}⚙️ Auto Mode",
-            f"userset {user_id} audio_split_mode auto",
+            f"{_cb_prefix()} {user_id} audio_split_mode auto",
         )
         buttons.data_button(
             f"{'✓ ' if split_mode == 'manual' else ''}✍️ Manual Mode",
-            f"userset {user_id} audio_split_mode manual",
+            f"{_cb_prefix()} {user_id} audio_split_mode manual",
         )
         # Language configuration is relevant only in Manual mode. Keep the
         # saved value while Auto is selected so switching back restores it.
         if split_mode == "manual":
             buttons.data_button(
                 f"🌐 Set Languages: {audio_split_languages}",
-                f"userset {user_id} audio_split_languages",
+                f"{_cb_prefix()} {user_id} audio_split_languages",
             )
             if user_dict.get("AUDIO_SPLIT_LANGUAGES"):
                 buttons.data_button(
                     "🗑️ Clear Languages",
-                    f"userset {user_id} audio_split_languages_clear",
+                    f"{_cb_prefix()} {user_id} audio_split_languages_clear",
                 )
 
-        buttons.data_button("◀️ Back", f"userset {user_id} back", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(2)
 
@@ -1163,21 +1211,21 @@ Configure custom video encoding, compression, and watermark overlays for uploads
 
         buttons.data_button(
             f"Intro Subtitle: {'✓ ON' if intro_enabled else 'OFF'}",
-            f"userset {user_id} tog INTRO_SUB_ENABLED {'f' if intro_enabled else 't'} intro_sub_menu",
+            f"{_cb_prefix()} {user_id} tog INTRO_SUB_ENABLED {'f' if intro_enabled else 't'} intro_sub_menu",
             position="header",
         )
-        buttons.data_button("⏱️ Duration (1-60s)", f"userset {user_id} menu INTRO_SUB_DURATION")
-        buttons.data_button("📝 Text", f"userset {user_id} menu INTRO_SUB_TEXT")
-        buttons.data_button("🔤 Text Font Style", f"userset {user_id} intro_sub_font_select")
-        buttons.data_button("🖼️ Image", f"userset {user_id} menu INTRO_SUB_IMAGE")
-        buttons.data_button("✨ Animation", f"userset {user_id} intro_sub_anim_select")
-        buttons.data_button("🎞️ Transition", f"userset {user_id} intro_sub_trans_select")
-        buttons.data_button("📍 Text Position", f"userset {user_id} intro_sub_text_pos_select")
-        buttons.data_button("📍 Image Position", f"userset {user_id} intro_sub_img_pos_select")
+        buttons.data_button("⏱️ Duration (1-60s)", f"{_cb_prefix()} {user_id} menu INTRO_SUB_DURATION")
+        buttons.data_button("📝 Text", f"{_cb_prefix()} {user_id} menu INTRO_SUB_TEXT")
+        buttons.data_button("🔤 Text Font Style", f"{_cb_prefix()} {user_id} intro_sub_font_select")
+        buttons.data_button("🖼️ Image", f"{_cb_prefix()} {user_id} menu INTRO_SUB_IMAGE")
+        buttons.data_button("✨ Animation", f"{_cb_prefix()} {user_id} intro_sub_anim_select")
+        buttons.data_button("🎞️ Transition", f"{_cb_prefix()} {user_id} intro_sub_trans_select")
+        buttons.data_button("📍 Text Position", f"{_cb_prefix()} {user_id} intro_sub_text_pos_select")
+        buttons.data_button("📍 Image Position", f"{_cb_prefix()} {user_id} intro_sub_img_pos_select")
 
-        buttons.data_button("◀️ Back", f"userset {user_id} vtools", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} vtools", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(2)
 
@@ -1196,28 +1244,28 @@ Configure custom video encoding, compression, and watermark overlays for uploads
 
     elif stype == "uphoster":
         # Quick metadata action available directly from Uphoster settings.
-        buttons.data_button("📝 Set Same Metadata Value for All Fields", f"userset {user_id} metafill SET_ALL_METADATA uphoster", position="header")
+        buttons.data_button("📝 Set Same Metadata Value for All Fields", f"{_cb_prefix()} {user_id} metafill SET_ALL_METADATA uphoster", position="header")
         uphoster_service = user_dict.get("UPHOSTER_SERVICE", "gofile")
         auto_ddl = user_dict.get("AUTO_DDL", False)
         buttons.data_button(
             f"Auto DDL: {'✓ ON' if auto_ddl else 'OFF'}",
-            f"userset {user_id} tog AUTO_DDL {'f' if auto_ddl else 't'} uphoster",
+            f"{_cb_prefix()} {user_id} tog AUTO_DDL {'f' if auto_ddl else 't'} uphoster",
             position="header",
         )
         buttons.data_button(
-            "Change Destination ⇋", f"userset {user_id} uphoster_destinations", "header"
+            "Change Destination ⇋", f"{_cb_prefix()} {user_id} uphoster_destinations", "header"
         )
-        buttons.data_button("Gofile Tools", f"userset {user_id} gofile")
-        buttons.data_button("BuzzHeavier Tools", f"userset {user_id} buzzheavier")
-        buttons.data_button("PixelDrain Tools", f"userset {user_id} pixeldrain")
-        buttons.data_button("DevUploads Tools", f"userset {user_id} devuploads")
-        buttons.data_button("VikingFile Tools", f"userset {user_id} vikingfile")
-        buttons.data_button("External/API Host Tools", f"userset {user_id} host_api_tools")
+        buttons.data_button("Gofile Tools", f"{_cb_prefix()} {user_id} gofile")
+        buttons.data_button("BuzzHeavier Tools", f"{_cb_prefix()} {user_id} buzzheavier")
+        buttons.data_button("PixelDrain Tools", f"{_cb_prefix()} {user_id} pixeldrain")
+        buttons.data_button("DevUploads Tools", f"{_cb_prefix()} {user_id} devuploads")
+        buttons.data_button("VikingFile Tools", f"{_cb_prefix()} {user_id} vikingfile")
+        buttons.data_button("External/API Host Tools", f"{_cb_prefix()} {user_id} host_api_tools")
         # Direct access to per-user Terabox cookies (also available via /cookiesettings).
         buttons.data_button("🍪 Terabox Cookies", "scookie terabox")
-        buttons.data_button("◀️ Back", f"userset {user_id} back", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(2)
 
@@ -1242,10 +1290,10 @@ Configure custom video encoding, compression, and watermark overlays for uploads
             ("Terabox API", "TERABOX_UPLOAD_URL", "TERABOX_API_KEY"),
         ]
         for label, url_key, key_key in api_hosts:
-            buttons.data_button(f"{label} Endpoint", f"userset {user_id} menu {url_key}")
-            buttons.data_button(f"{label} API Key", f"userset {user_id} menu {key_key}")
-        buttons.data_button("◀️ Back", f"userset {user_id} back uphoster", "footer")
-        buttons.data_button("❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
+            buttons.data_button(f"{label} Endpoint", f"{_cb_prefix()} {user_id} menu {url_key}")
+            buttons.data_button(f"{label} API Key", f"{_cb_prefix()} {user_id} menu {key_key}")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back uphoster", "footer")
+        buttons.data_button("❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER)
         btns = buttons.build_menu(2)
         configured = sum(bool(user_dict.get(k) or getattr(Config, k, "")) for _, u, k in api_hosts for k in (u,))
         text = f"""<b>🌐 External/API Host Destinations</b>
@@ -1255,10 +1303,10 @@ The bot does not guess undocumented endpoints.</blockquote>
 
 <b>Configured endpoints:</b> <code>{configured}/{len(api_hosts)}</code>"""
     elif stype == "pixeldrain":
-        buttons.data_button("PixelDrain Key", f"userset {user_id} menu PIXELDRAIN_KEY")
-        buttons.data_button("◀️ Back", f"userset {user_id} back uphoster", "footer")
+        buttons.data_button("PixelDrain Key", f"{_cb_prefix()} {user_id} menu PIXELDRAIN_KEY")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back uphoster", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(1)
 
@@ -1282,14 +1330,14 @@ The bot does not guess undocumented endpoints.</blockquote>
 
     elif stype == "buzzheavier":
         buttons.data_button(
-            "BuzzHeavier Token", f"userset {user_id} menu BUZZHEAVIER_TOKEN"
+            "BuzzHeavier Token", f"{_cb_prefix()} {user_id} menu BUZZHEAVIER_TOKEN"
         )
         buttons.data_button(
-            "BuzzHeavier Folder ID", f"userset {user_id} menu BUZZHEAVIER_FOLDER_ID"
+            "BuzzHeavier Folder ID", f"{_cb_prefix()} {user_id} menu BUZZHEAVIER_FOLDER_ID"
         )
-        buttons.data_button("◀️ Back", f"userset {user_id} back uphoster", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back uphoster", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(1)
 
@@ -1319,14 +1367,14 @@ The bot does not guess undocumented endpoints.</blockquote>
 
     elif stype == "devuploads":
         buttons.data_button(
-            "DevUploads API Key", f"userset {user_id} menu DEVUPLOADS_KEY"
+            "DevUploads API Key", f"{_cb_prefix()} {user_id} menu DEVUPLOADS_KEY"
         )
         buttons.data_button(
-            "DevUploads Folder ID", f"userset {user_id} menu DEVUPLOADS_FOLDER"
+            "DevUploads Folder ID", f"{_cb_prefix()} {user_id} menu DEVUPLOADS_FOLDER"
         )
-        buttons.data_button("◀️ Back", f"userset {user_id} back uphoster", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back uphoster", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(1)
 
@@ -1349,14 +1397,14 @@ The bot does not guess undocumented endpoints.</blockquote>
 
     elif stype == "vikingfile":
         buttons.data_button(
-            "VikingFile Hash", f"userset {user_id} menu VIKINGFILE_HASH"
+            "VikingFile Hash", f"{_cb_prefix()} {user_id} menu VIKINGFILE_HASH"
         )
         buttons.data_button(
-            "VikingFile Folder", f"userset {user_id} menu VIKINGFILE_FOLDER"
+            "VikingFile Folder", f"{_cb_prefix()} {user_id} menu VIKINGFILE_FOLDER"
         )
-        buttons.data_button("◀️ Back", f"userset {user_id} back uphoster", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back uphoster", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(1)
 
@@ -1378,9 +1426,9 @@ The bot does not guess undocumented endpoints.</blockquote>
 • <b>Folder Path:</b> <code>{vffolder}</code></blockquote>"""
 
     elif stype == "gofile":
-        buttons.data_button("Gofile Token", f"userset {user_id} menu GOFILE_TOKEN")
+        buttons.data_button("Gofile Token", f"{_cb_prefix()} {user_id} menu GOFILE_TOKEN")
         buttons.data_button(
-            "Gofile Folder ID", f"userset {user_id} menu GOFILE_FOLDER_ID"
+            "Gofile Folder ID", f"{_cb_prefix()} {user_id} menu GOFILE_FOLDER_ID"
         )
         auto_create = (
             user_dict.get("GOFILE_AUTO_CREATE_FOLDER")
@@ -1390,11 +1438,11 @@ The bot does not guess undocumented endpoints.</blockquote>
         auto_state = "✓" if auto_create else ""
         buttons.data_button(
             f"Auto-Create Folder {auto_state}",
-            f"userset {user_id} tog GOFILE_AUTO_CREATE_FOLDER {'t' if not auto_create else 'f'}",
+            f"{_cb_prefix()} {user_id} tog GOFILE_AUTO_CREATE_FOLDER {'t' if not auto_create else 'f'}",
         )
-        buttons.data_button("◀️ Back", f"userset {user_id} back uphoster", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back uphoster", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(1)
 
@@ -1442,20 +1490,20 @@ The bot does not guess undocumented endpoints.</blockquote>
         ) or "none"
         for label, tag in fonts:
             st = "✓ " if cur_font == tag else ""
-            buttons.data_button(f"{st}{label}", f"userset {user_id} setfont {tag}")
-        buttons.data_button("◀️ Back", f"userset {user_id} leech", position="footer")
+            buttons.data_button(f"{st}{label}", f"{_cb_prefix()} {user_id} setfont {tag}")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} leech", position="footer")
         btns = buttons.build_menu(2)
         text = f"<b>📄 Select Caption Font Style:</b>\nCurrent: <code>{cur_font}</code>"
     elif stype == "rclone":
-        buttons.data_button("Rclone Config", f"userset {user_id} menu RCLONE_CONFIG")
+        buttons.data_button("Rclone Config", f"{_cb_prefix()} {user_id} menu RCLONE_CONFIG")
         buttons.data_button(
-            "Default Rclone Path", f"userset {user_id} menu RCLONE_PATH"
+            "Default Rclone Path", f"{_cb_prefix()} {user_id} menu RCLONE_PATH"
         )
-        buttons.data_button("Rclone Flags", f"userset {user_id} menu RCLONE_FLAGS")
+        buttons.data_button("Rclone Flags", f"{_cb_prefix()} {user_id} menu RCLONE_FLAGS")
 
-        buttons.data_button("◀️ Back", f"userset {user_id} back mirror", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back mirror", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
 
         rccmsg = "Exists" if await aiopath.exists(rclone_conf) else "Not Exists"
@@ -1482,31 +1530,31 @@ The bot does not guess undocumented endpoints.</blockquote>
 • <b>Default Path:</b> <code>{rccpath}</code></blockquote>"""
 
     elif stype == "gdrive":
-        buttons.data_button("Default Gdrive ID", f"userset {user_id} menu GDRIVE_ID")
-        buttons.data_button("Default Index URL", f"userset {user_id} menu INDEX_URL")
-        buttons.data_button("Token.pickle", f"userset {user_id} menu TOKEN_PICKLE")
+        buttons.data_button("Default Gdrive ID", f"{_cb_prefix()} {user_id} menu GDRIVE_ID")
+        buttons.data_button("Default Index URL", f"{_cb_prefix()} {user_id} menu INDEX_URL")
+        buttons.data_button("Token.pickle", f"{_cb_prefix()} {user_id} menu TOKEN_PICKLE")
         if (
             user_dict.get("STOP_DUPLICATE", False)
             or "STOP_DUPLICATE" not in user_dict
             and Config.STOP_DUPLICATE
         ):
             buttons.data_button(
-                "Disable Stop Duplicate", f"userset {user_id} tog STOP_DUPLICATE f"
+                "Disable Stop Duplicate", f"{_cb_prefix()} {user_id} tog STOP_DUPLICATE f"
             )
             sd_msg = "Enabled"
         else:
             buttons.data_button(
                 "Enable Stop Duplicate",
-                f"userset {user_id} tog STOP_DUPLICATE t",
+                f"{_cb_prefix()} {user_id} tog STOP_DUPLICATE t",
                 "l_body",
             )
             sd_msg = "Disabled"
         buttons.data_button(
-            "User Drive Categories", f"userset {user_id} menu DRIVE_CAT", "header"
+            "User Drive Categories", f"{_cb_prefix()} {user_id} menu DRIVE_CAT", "header"
         )
-        buttons.data_button("◀️ Back", f"userset {user_id} back mirror", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back mirror", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
 
         tokenmsg = "Exists" if await aiopath.exists(token_pickle) else "Not Exists"
@@ -1553,8 +1601,8 @@ The bot does not guess undocumented endpoints.</blockquote>
 • <b>Categories:</b>\n{drive_cat_display}</blockquote>"""
     elif stype == "mirror":
         # Quick metadata action available directly from Mirror settings.
-        buttons.data_button("📝 Set Same Metadata Value for All Fields", f"userset {user_id} metafill SET_ALL_METADATA mirror", position="header")
-        buttons.data_button("RClone Tools", f"userset {user_id} rclone")
+        buttons.data_button("📝 Set Same Metadata Value for All Fields", f"{_cb_prefix()} {user_id} metafill SET_ALL_METADATA mirror", position="header")
+        buttons.data_button("RClone Tools", f"{_cb_prefix()} {user_id} rclone")
         rccmsg = "Exists" if await aiopath.exists(rclone_conf) else "Not Exists"
         if user_dict.get("RCLONE_PATH", False):
             rccpath = user_dict["RCLONE_PATH"]
@@ -1563,7 +1611,7 @@ The bot does not guess undocumented endpoints.</blockquote>
         else:
             rccpath = "None"
 
-        buttons.data_button("GDrive Tools", f"userset {user_id} gdrive")
+        buttons.data_button("GDrive Tools", f"{_cb_prefix()} {user_id} gdrive")
         tokenmsg = "Exists" if await aiopath.exists(token_pickle) else "Not Exists"
         if user_dict.get("GDRIVE_ID", False):
             gdrive_id = user_dict["GDRIVE_ID"]
@@ -1582,26 +1630,26 @@ The bot does not guess undocumented endpoints.</blockquote>
         else:
             sd_msg = "Disabled"
 
-        buttons.data_button("YT Up Tools", f"userset {user_id} yttools")
-        buttons.data_button("Mega Tools", f"userset {user_id} mega")
+        buttons.data_button("YT Up Tools", f"{_cb_prefix()} {user_id} yttools")
+        buttons.data_button("Mega Tools", f"{_cb_prefix()} {user_id} mega")
         if not Config.DISABLE_SEEDR:
-            buttons.data_button("Seedr Tools", f"userset {user_id} seedr")
+            buttons.data_button("Seedr Tools", f"{_cb_prefix()} {user_id} seedr")
         if Config.DRIVE_CATEGORY_MODE:
             dc_enabled = user_dict.get("drive_cat_mode", False)
             buttons.data_button(
                 f"Drive Categories: {'ON' if dc_enabled else 'OFF'}",
-                f"userset {user_id} tog drive_cat_mode {'f' if dc_enabled else 't'}",
+                f"{_cb_prefix()} {user_id} tog drive_cat_mode {'f' if dc_enabled else 't'}",
                 "header",
             )
         auto_mirror = user_dict.get("AUTO_MIRROR", False)
         buttons.data_button(
             f"Auto Mirror: {'✓ ON' if auto_mirror else 'OFF'}",
-            f"userset {user_id} tog AUTO_MIRROR {'f' if auto_mirror else 't'} mirror",
+            f"{_cb_prefix()} {user_id} tog AUTO_MIRROR {'f' if auto_mirror else 't'} mirror",
             position="header",
         )
-        buttons.data_button("◀️ Back", f"userset {user_id} back", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(2)
 
@@ -1625,22 +1673,22 @@ The bot does not guess undocumented endpoints.</blockquote>
             else ""
         )
 
-        buttons.data_button("Mega Email", f"userset {user_id} menu MEGA_EMAIL")
+        buttons.data_button("Mega Email", f"{_cb_prefix()} {user_id} menu MEGA_EMAIL")
         if mega_email:
             buttons.data_button(
-                "Mega Password", f"userset {user_id} menu MEGA_PASSWORD"
+                "Mega Password", f"{_cb_prefix()} {user_id} menu MEGA_PASSWORD"
             )
 
         if has_creds:
             buttons.data_button(
                 "Remove Account",
-                f"userset {user_id} remove MEGA_EMAIL",
+                f"{_cb_prefix()} {user_id} remove MEGA_EMAIL",
                 position="l_body",
             )
 
-        buttons.data_button("◀️ Back", f"userset {user_id} back mirror", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back mirror", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(1)
 
@@ -1675,32 +1723,32 @@ The bot does not guess undocumented endpoints.</blockquote>
             else ""
         )
 
-        buttons.data_button("Seedr Email", f"userset {user_id} menu SEEDR_EMAIL")
+        buttons.data_button("Seedr Email", f"{_cb_prefix()} {user_id} menu SEEDR_EMAIL")
         if seedr_email:
             buttons.data_button(
-                "Seedr Password", f"userset {user_id} menu SEEDR_PASSWORD"
+                "Seedr Password", f"{_cb_prefix()} {user_id} menu SEEDR_PASSWORD"
             )
 
         buttons.data_button(
             f"Delete Folder: {'ON' if seedr_delete else 'OFF'}",
-            f"userset {user_id} tog SEEDR_DELETE_FOLDER {'f' if seedr_delete else 't'}",
+            f"{_cb_prefix()} {user_id} tog SEEDR_DELETE_FOLDER {'f' if seedr_delete else 't'}",
         )
 
         if has_creds:
             buttons.data_button(
                 "Clear Storage",
-                f"userset {user_id} clear_seedr",
+                f"{_cb_prefix()} {user_id} clear_seedr",
                 position="l_body",
             )
             buttons.data_button(
                 "Remove Account",
-                f"userset {user_id} remove SEEDR_EMAIL",
+                f"{_cb_prefix()} {user_id} remove SEEDR_EMAIL",
                 position="l_body",
             )
 
-        buttons.data_button("◀️ Back", f"userset {user_id} back mirror", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back mirror", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(1)
 
@@ -1720,14 +1768,14 @@ The bot does not guess undocumented endpoints.</blockquote>
         enable_ffc = user_dict.get("ENABLE_FFMPEG_CMDS") if "ENABLE_FFMPEG_CMDS" in user_dict else Config.ENABLE_FFMPEG_CMDS
         buttons.data_button(
             f"FFmpeg Commands: {'ON' if enable_ffc else 'OFF'}",
-            f"userset {user_id} tog ENABLE_FFMPEG_CMDS {'f' if enable_ffc else 't'}",
+            f"{_cb_prefix()} {user_id} tog ENABLE_FFMPEG_CMDS {'f' if enable_ffc else 't'}",
             position="header",
         )
         buttons.data_button(
-            "FFmpeg Cmds", f"userset {user_id} menu FFMPEG_CMDS"
+            "FFmpeg Cmds", f"{_cb_prefix()} {user_id} menu FFMPEG_CMDS"
         )
         buttons.data_button(
-            "DUMP", f"userset {user_id} menu FFMPEG_DUMP"
+            "DUMP", f"{_cb_prefix()} {user_id} menu FFMPEG_DUMP"
         )
 
         user_ff = user_dict.get("FFMPEG_CMDS") or {}
@@ -1753,7 +1801,7 @@ The bot does not guess undocumented endpoints.</blockquote>
 
         buttons.data_button(
             f"Set All Metadata: {'ON' if set_all_enabled else 'OFF'}",
-            f"userset {user_id} tog SET_ALL_METADATA_ENABLE {'f' if set_all_enabled else 't'}",
+            f"{_cb_prefix()} {user_id} tog SET_ALL_METADATA_ENABLE {'f' if set_all_enabled else 't'}",
             position="header",
         )
         # Expose all metadata values as editable buttons. Previously the values
@@ -1765,17 +1813,17 @@ The bot does not guess undocumented endpoints.</blockquote>
             ("VIDEO_METADATA", "Configure Video Metadata"),
             ("SUBTITLE_METADATA", "Configure Subtitle Metadata"),
         ):
-            buttons.data_button(meta_label, f"userset {user_id} menu {meta_key}")
+            buttons.data_button(meta_label, f"{_cb_prefix()} {user_id} menu {meta_key}")
 
         strip_meta_enabled = user_dict.get("STRIP_METADATA_ENABLE", False)
         buttons.data_button(
             f"Strip Metadata: {'ON' if strip_meta_enabled else 'OFF'}",
-            f"userset {user_id} tog STRIP_METADATA_ENABLE {'f' if strip_meta_enabled else 't'}",
+            f"{_cb_prefix()} {user_id} tog STRIP_METADATA_ENABLE {'f' if strip_meta_enabled else 't'}",
         )
         track_lang_enabled = user_dict.get("TRACK_DATA_LANGUAGE", True)
         buttons.data_button(
             f"Track Data Language: {'ON' if track_lang_enabled else 'OFF'}",
-            f"userset {user_id} tog TRACK_DATA_LANGUAGE {'f' if track_lang_enabled else 't'}",
+            f"{_cb_prefix()} {user_id} tog TRACK_DATA_LANGUAGE {'f' if track_lang_enabled else 't'}",
         )
 
         display_set_all_meta = _metadata_setting_display(
@@ -1792,9 +1840,9 @@ The bot does not guess undocumented endpoints.</blockquote>
             user_dict.get("SUBTITLE_METADATA")
         )
 
-        buttons.data_button("◀️ Back", f"userset {user_id} back", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(2, h_cols=1)
 
@@ -1819,7 +1867,7 @@ The bot does not guess undocumented endpoints.</blockquote>
         next_ns = "filename" if name_source == "caption" else "caption"
         buttons.data_button(
             f"Name Source: {ns_label}",
-            f"userset {user_id} name_source {next_ns}",
+            f"{_cb_prefix()} {user_id} name_source {next_ns}",
             position="header",
         )
 
@@ -1828,12 +1876,12 @@ The bot does not guess undocumented endpoints.</blockquote>
         next_rm = "normal" if range_mode == "each" else "each"
         buttons.data_button(
             f"Range Link Mode: {rm_label}",
-            f"userset {user_id} range_mode {next_rm}",
+            f"{_cb_prefix()} {user_id} range_mode {next_rm}",
             position="header",
         )
 
         buttons.data_button(
-            "Excluded Extensions", f"userset {user_id} menu EXCLUDED_EXTENSIONS"
+            "Excluded Extensions", f"{_cb_prefix()} {user_id} menu EXCLUDED_EXTENSIONS"
         )
         if user_dict.get("EXCLUDED_EXTENSIONS", False):
             ex_ex = user_dict["EXCLUDED_EXTENSIONS"]
@@ -1847,22 +1895,22 @@ The bot does not guess undocumented endpoints.</blockquote>
 
         swap = user_dict.get("NAME_SWAP", False)
         ns_msg = f"<code>{swap}</code>" if swap else "<b>Not Set</b>"
-        buttons.data_button("Name Swap", f"userset {user_id} menu NAME_SWAP")
+        buttons.data_button("Name Swap", f"{_cb_prefix()} {user_id} menu NAME_SWAP")
 
         auto_rename = user_dict.get("AUTO_RENAME", False) or (
             "AUTO_RENAME" not in user_dict and getattr(Config, "AUTO_RENAME", False)
         )
         buttons.data_button(
             f"Auto Rename: {'ON' if auto_rename else 'OFF'}",
-            f"userset {user_id} tog AUTO_RENAME {'f' if auto_rename else 't'} advanced",
+            f"{_cb_prefix()} {user_id} tog AUTO_RENAME {'f' if auto_rename else 't'} advanced",
         )
 
         rename_fmt = user_dict.get("AUTO_RENAME_FORMAT") or getattr(
             Config, "AUTO_RENAME_FORMAT", "{TITLE} - {SEASON} {EPISODE} {QUALITY}"
         )
-        buttons.data_button("Rename Format", f"userset {user_id} menu AUTO_RENAME_FORMAT")
+        buttons.data_button("Rename Format", f"{_cb_prefix()} {user_id} menu AUTO_RENAME_FORMAT")
 
-        buttons.data_button("YT-DLP Options", f"userset {user_id} menu YT_DLP_OPTIONS")
+        buttons.data_button("YT-DLP Options", f"{_cb_prefix()} {user_id} menu YT_DLP_OPTIONS")
         if user_dict.get("YT_DLP_OPTIONS", False):
             ytopt = user_dict["YT_DLP_OPTIONS"]
         elif "YT_DLP_OPTIONS" not in user_dict and Config.YT_DLP_OPTIONS:
@@ -1876,14 +1924,14 @@ The bot does not guess undocumented endpoints.</blockquote>
             upload_paths = Config.UPLOAD_PATHS
         else:
             upload_paths = "None"
-        buttons.data_button("Upload Paths", f"userset {user_id} menu UPLOAD_PATHS")
+        buttons.data_button("Upload Paths", f"{_cb_prefix()} {user_id} menu UPLOAD_PATHS")
 
         yt_cookie_path = f"cookies/{user_id}/cookies.txt"
         user_cookie_msg = (
             "Exists" if await aiopath.exists(yt_cookie_path) else "Not Exists"
         )
         buttons.data_button(
-            "YT Cookie File", f"userset {user_id} menu USER_COOKIE_FILE"
+            "YT Cookie File", f"{_cb_prefix()} {user_id} menu USER_COOKIE_FILE"
         )
 
         session_mode = user_dict.get("TELEGRAM_SESSION_MODE", "disabled")
@@ -1896,12 +1944,12 @@ The bot does not guess undocumented endpoints.</blockquote>
         session_state = session_labels.get(session_mode, "Disabled")
         buttons.data_button(
             f"🔐 Session String: {session_state}",
-            f"userset {user_id} session_menu",
+            f"{_cb_prefix()} {user_id} session_menu",
         )
 
-        buttons.data_button("◀️ Back", f"userset {user_id} back", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(2)
 
@@ -1918,13 +1966,13 @@ The bot does not guess undocumented endpoints.</blockquote>
 • <b>Cookie File Status:</b> <b>{user_cookie_msg}</b>
 • <b>Personal Session:</b> <b>{session_state}</b></blockquote>"""
     elif stype == "yttools":
-        buttons.data_button("YT Description", f"userset {user_id} menu YT_DESP")
+        buttons.data_button("YT Description", f"{_cb_prefix()} {user_id} menu YT_DESP")
         yt_desp_val = user_dict.get(
             "YT_DESP",
             Config.YT_DESP if hasattr(Config, "YT_DESP") else "Not Set (Uses Default)",
         )
 
-        buttons.data_button("YT Tags", f"userset {user_id} menu YT_TAGS")
+        buttons.data_button("YT Tags", f"{_cb_prefix()} {user_id} menu YT_TAGS")
         yt_tags_val = user_dict.get(
             "YT_TAGS",
             Config.YT_TAGS if hasattr(Config, "YT_TAGS") else "Not Set (Uses Default)",
@@ -1932,7 +1980,7 @@ The bot does not guess undocumented endpoints.</blockquote>
         if isinstance(yt_tags_val, list):
             yt_tags_val = ",".join(yt_tags_val)
 
-        buttons.data_button("YT Category ID", f"userset {user_id} menu YT_CATEGORY_ID")
+        buttons.data_button("YT Category ID", f"{_cb_prefix()} {user_id} menu YT_CATEGORY_ID")
         yt_cat_id_val = user_dict.get(
             "YT_CATEGORY_ID",
             (
@@ -1943,7 +1991,7 @@ The bot does not guess undocumented endpoints.</blockquote>
         )
 
         buttons.data_button(
-            "YT Privacy Status", f"userset {user_id} menu YT_PRIVACY_STATUS"
+            "YT Privacy Status", f"{_cb_prefix()} {user_id} menu YT_PRIVACY_STATUS"
         )
         yt_privacy_val = user_dict.get(
             "YT_PRIVACY_STATUS",
@@ -1954,9 +2002,9 @@ The bot does not guess undocumented endpoints.</blockquote>
             ),
         )
 
-        buttons.data_button("◀️ Back", f"userset {user_id} back mirror", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back mirror", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         btns = buttons.build_menu(2)
 
@@ -1997,7 +2045,7 @@ async def _process_user_image_input(message, user_id: int, target_path: str, as_
     if raw_txt and is_telegram_link(raw_txt):
         try:
             tg_msgs = await get_tg_link_message(
-                raw_txt, user_id=user_id, user_dict=user_data.get(user_id, {})
+                raw_txt, user_id=user_id, user_dict=_get_ud(user_id)
             )
             if tg_msgs and tg_msgs[0]:
                 source_msg = tg_msgs[0]
@@ -2112,9 +2160,9 @@ async def add_file(_, message, ftype, rfunc, target_user_id=None):
             )
     await delete_message(message)
     if des_dir:
-        update_user_ldata(user_id, ftype, des_dir)
+        _set_ud(user_id, ftype, des_dir)
         if ftype == "THUMBNAIL":
-            update_user_ldata(user_id, "THUMBNAIL_MODE", "custom")
+            _set_ud(user_id, "THUMBNAIL_MODE", "custom")
         await database.update_user_doc(user_id, ftype, des_dir)
         # Persist the selected custom-thumbnail mode with the stored image.
         if ftype == "THUMBNAIL":
@@ -2199,7 +2247,7 @@ async def add_one(_, message, option, rfunc, target_user_id=None):
     user = message.from_user or message.sender_chat
     user_id = target_user_id or (user.id if user else 0)
     handler_dict[user_id] = False
-    user_dict = user_data.get(user_id, {})
+    user_dict = _get_ud(user_id)
     value = message.text
     if option == "LEECH_DUMP_CHATS":
         value = await parse_dump_chats(message, value)
@@ -2208,7 +2256,7 @@ async def add_one(_, message, option, rfunc, target_user_id=None):
         if user_dict.get(option):
             user_dict[option].update(value)
         else:
-            update_user_ldata(user_id, option, value)
+            _set_ud(user_id, option, value)
     elif value.startswith("{") and value.endswith("}"):
         try:
             value = literal_eval(value)
@@ -2231,7 +2279,7 @@ async def add_one(_, message, option, rfunc, target_user_id=None):
             if user_dict.get(option):
                 user_dict[option].update(value)
             else:
-                update_user_ldata(user_id, option, value)
+                _set_ud(user_id, option, value)
         except Exception as e:
             await send_message(message, str(e))
             return
@@ -2248,7 +2296,7 @@ async def remove_one(_, message, option, rfunc, target_user_id=None):
     user = message.from_user or message.sender_chat
     user_id = target_user_id or (user.id if user else 0)
     handler_dict[user_id] = False
-    user_dict = user_data.get(user_id, {})
+    user_dict = _get_ud(user_id)
     names = [name.strip() for name in message.text.split("/") if name.strip()]
     opt_dict = user_dict.get(option)
     if isinstance(opt_dict, dict):
@@ -2270,7 +2318,7 @@ async def set_option(_, message, option, rfunc, target_user_id=None):
             value = get_size_bytes(value)
         value = int(value)
         user_max_split = TgClient.max_split_size_for_user(
-            user_id, user_data.get(user_id, {})
+            user_id, _get_ud(user_id)
         )
         if value == 4_000_000_000 and user_max_split == TgClient.TELEGRAM_PREMIUM_MAX_BYTES:
             value = TgClient.TELEGRAM_PREMIUM_MAX_BYTES
@@ -2323,7 +2371,7 @@ async def set_option(_, message, option, rfunc, target_user_id=None):
             value = {field_key: raw_value for field_key, _ in METADATA_FIELD_OPTIONS}
 
     elif option == "FFMPEG_DUMP":
-        user_dump = user_data.get(user_id, {}).get("FFMPEG_DUMP", {})
+        user_dump = _get_ud(user_id).get("FFMPEG_DUMP", {})
         if not isinstance(user_dump, dict):
             user_dump = {}
         if value.startswith("{") and value.endswith("}"):
@@ -2346,7 +2394,7 @@ async def set_option(_, message, option, rfunc, target_user_id=None):
             return
         value = user_dump
     elif option == "FFMPEG_CMDS":
-        user_ff = user_data.get(user_id, {}).get("FFMPEG_CMDS", {})
+        user_ff = _get_ud(user_id).get("FFMPEG_CMDS", {})
         if not isinstance(user_ff, dict):
             user_ff = {}
         if value.startswith("{") and value.endswith("}"):
@@ -2424,7 +2472,7 @@ async def set_option(_, message, option, rfunc, target_user_id=None):
             return
         value = saved_path
         if option == "THUMBNAIL":
-            update_user_ldata(user_id, "THUMBNAIL_MODE", "custom")
+            _set_ud(user_id, "THUMBNAIL_MODE", "custom")
         if option in ("THUMBNAIL", "INTRO_SUB_IMAGE"):
             await database.update_user_doc(user_id, option, saved_path)
     elif option in ["UPLOAD_PATHS", "YT_DLP_OPTIONS", "DRIVE_CAT"]:
@@ -2451,9 +2499,9 @@ async def set_option(_, message, option, rfunc, target_user_id=None):
         else:
             await send_message(message, "Input must be a valid Python dictionary!")
             return
-    update_user_ldata(user_id, option, value)
+    _set_ud(user_id, option, value)
     if option == "SET_ALL_METADATA":
-        update_user_ldata(user_id, "SET_ALL_METADATA_ENABLE", True)
+        _set_ud(user_id, "SET_ALL_METADATA_ENABLE", True)
     await delete_message(message)
     await rfunc()
     await database.update_user_data(user_id)
@@ -2461,7 +2509,7 @@ async def set_option(_, message, option, rfunc, target_user_id=None):
 
 async def get_menu(option, message, user_id, start=0):
     handler_dict[user_id] = False
-    user_dict = user_data.get(user_id, {})
+    user_dict = _get_ud(user_id)
 
     # Migrate saved metadata settings whenever the user opens this menu.
     # This removes obsolete tags from existing MongoDB/user_data records while
@@ -2509,51 +2557,51 @@ async def get_menu(option, message, user_id, start=0):
         if option == "SET_ALL_METADATA":
             buttons.data_button(
                 "📝 Set Same Value for All Fields",
-                f"userset {user_id} metafill SET_ALL_METADATA",
+                f"{_cb_prefix()} {user_id} metafill SET_ALL_METADATA",
                 position="header",
             )
         for field_key, field_label in METADATA_FIELD_OPTIONS[meta_page:meta_page + 6]:
             current = current_values.get(field_key, "")
             label = f"✏️ {field_label}" + (f": {str(current)[:16]}" if current else "")
-            buttons.data_button(label, f"userset {user_id} metafield {option} {field_key}")
+            buttons.data_button(label, f"{_cb_prefix()} {user_id} metafield {option} {field_key}")
         if len(METADATA_FIELD_OPTIONS) > 6:
             for x in range(0, len(METADATA_FIELD_OPTIONS), 6):
-                buttons.data_button(f"Fields {x + 1}-{min(x + 6, len(METADATA_FIELD_OPTIONS))}", f"userset {user_id} metapage {option} {x}", position="footer")
+                buttons.data_button(f"Fields {x + 1}-{min(x + 6, len(METADATA_FIELD_OPTIONS))}", f"{_cb_prefix()} {user_id} metapage {option} {x}", position="footer")
 
     if option == "FFMPEG_CMDS":
-        buttons.data_button("Add/Edit Preset", f"userset {user_id} set FFMPEG_CMDS", "header")
-        buttons.data_button("Add Multiple Presets", f"userset {user_id} addone FFMPEG_CMDS", "header")
+        buttons.data_button("Add/Edit Preset", f"{_cb_prefix()} {user_id} set FFMPEG_CMDS", "header")
+        buttons.data_button("Add Multiple Presets", f"{_cb_prefix()} {user_id} addone FFMPEG_CMDS", "header")
         if user_dict.get("FFMPEG_CMDS", False):
-            buttons.data_button("Delete Specific Preset", f"userset {user_id} rmone FFMPEG_CMDS")
-            buttons.data_button("Reset All Presets", f"userset {user_id} reset FFMPEG_CMDS")
+            buttons.data_button("Delete Specific Preset", f"{_cb_prefix()} {user_id} rmone FFMPEG_CMDS")
+            buttons.data_button("Reset All Presets", f"{_cb_prefix()} {user_id} reset FFMPEG_CMDS")
     else:
         buttons.data_button(
             "Change" if user_dict.get(option, False) else "Set",
-            f"userset {user_id} {key} {option}",
+            f"{_cb_prefix()} {user_id} {key} {option}",
         )
         if option in ["THUMBNAIL", "INTRO_SUB_IMAGE", "THUMB_WM_IMAGE", "WM_IMAGE"]:
-            buttons.data_button("🔗 Set via Image Link", f"userset {user_id} set {option}")
+            buttons.data_button("🔗 Set via Image Link", f"{_cb_prefix()} {user_id} set {option}")
         if user_dict.get(option, False) or (option in file_dict and await aiopath.exists(file_dict[option])):
             if option == "THUMBNAIL":
                 buttons.data_button(
-                    "View Thumb", f"userset {user_id} view THUMBNAIL", "header"
+                    "View Thumb", f"{_cb_prefix()} {user_id} view THUMBNAIL", "header"
                 )
             elif option == "INTRO_SUB_IMAGE":
                 buttons.data_button(
-                    "View Image", f"userset {user_id} view INTRO_SUB_IMAGE", "header"
+                    "View Image", f"{_cb_prefix()} {user_id} view INTRO_SUB_IMAGE", "header"
                 )
             elif option in ["YT_DLP_OPTIONS", "UPLOAD_PATHS", "DRIVE_CAT", "LEECH_DUMP_CHATS"]:
                 buttons.data_button(
-                    "Add One", f"userset {user_id} addone {option}", "header"
+                    "Add One", f"{_cb_prefix()} {user_id} addone {option}", "header"
                 )
                 buttons.data_button(
-                    "Remove One", f"userset {user_id} rmone {option}", "header"
+                    "Remove One", f"{_cb_prefix()} {user_id} rmone {option}", "header"
                 )
 
             if key != "file":
-                buttons.data_button("Reset", f"userset {user_id} reset {option}")
+                buttons.data_button("Reset", f"{_cb_prefix()} {user_id} reset {option}")
             elif await aiopath.exists(file_dict[option]):
-                buttons.data_button("Remove", f"userset {user_id} remove {option}")
+                buttons.data_button("Remove", f"{_cb_prefix()} {user_id} remove {option}")
 
     if option == "FFMPEG_CMDS":
         user_ff = user_dict.get("FFMPEG_CMDS") or {}
@@ -2575,7 +2623,7 @@ async def get_menu(option, message, user_id, start=0):
             if len(avail_keys) > 5:
                 for x in range(0, len(avail_keys), 5):
                     buttons.data_button(
-                        f"{int(x / 5) + 1}", f"userset {user_id} ffpage {x}", position="footer"
+                        f"{int(x / 5) + 1}", f"{_cb_prefix()} {user_id} ffpage {x}", position="footer"
                     )
         else:
             val = "<b>No commands configured.</b>"
@@ -2611,9 +2659,9 @@ async def get_menu(option, message, user_id, start=0):
         back_to = "intro_sub_menu"
     else:
         back_to = "back"
-    buttons.data_button("◀️ Back", f"userset {user_id} {back_to}", "footer")
+    buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} {back_to}", "footer")
     buttons.data_button(
-        "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+        "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
     )
     val_setting = user_dict.get(option)
     val = ""
@@ -2695,6 +2743,7 @@ async def get_menu(option, message, user_id, start=0):
 
 async def event_handler(client, query, pfunc, rfunc, photo=False, document=False):
     user_id = query.from_user.id
+    is_tmv_scope = _is_tmv_scope()
     token = time()
     handler_dict[user_id] = token
     start_time = update_time = token
@@ -2724,6 +2773,7 @@ async def event_handler(client, query, pfunc, rfunc, photo=False, document=False
     async def _wrapped_pfunc(cli, msg):
         if handler_dict.get(user_id) != token:
             return
+        ctx_tok = _TMV_IND_CTX.set(is_tmv_scope)
         try:
             await pfunc(cli, msg)
         except TypeError as exc:
@@ -2731,6 +2781,8 @@ async def event_handler(client, query, pfunc, rfunc, photo=False, document=False
                 await pfunc(msg)
             else:
                 raise
+        finally:
+            _TMV_IND_CTX.reset(ctx_tok)
 
     handler = client.add_handler(
         MessageHandler(_wrapped_pfunc, filters=create(event_filter)), group=-4
@@ -2742,7 +2794,11 @@ async def event_handler(client, query, pfunc, rfunc, photo=False, document=False
                 if handler_dict.get(user_id) == token:
                     handler_dict[user_id] = False
                     with suppress(Exception):
-                        await rfunc()
+                        ctx_tok = _TMV_IND_CTX.set(is_tmv_scope)
+                        try:
+                            await rfunc()
+                        finally:
+                            _TMV_IND_CTX.reset(ctx_tok)
                 break
             elif time() - update_time > 8 and handler_dict.get(user_id) == token:
                 update_time = time()
@@ -2766,8 +2822,25 @@ async def event_handler(client, query, pfunc, rfunc, photo=False, document=False
             client.remove_handler(*handler)
 
 
+async def open_tmv_independent_settings(query):
+    ctx_tok = _TMV_IND_CTX.set(True)
+    try:
+        await update_user_settings(query, stype="main")
+    finally:
+        _TMV_IND_CTX.reset(ctx_tok)
+
+
 @new_task
 async def edit_user_settings(client, query):
+    is_tmv_scope = str(getattr(query, "data", "") or "").startswith("tmvset ")
+    ctx_tok = _TMV_IND_CTX.set(is_tmv_scope)
+    try:
+        await _edit_user_settings_impl(client, query)
+    finally:
+        _TMV_IND_CTX.reset(ctx_tok)
+
+
+async def _edit_user_settings_impl(client, query):
     from_user = query.from_user
     user_id = from_user.id
     name = from_user.mention(style="html")
@@ -2775,12 +2848,13 @@ async def edit_user_settings(client, query):
     data = query.data.split()
 
     handler_dict[user_id] = False
-    thumb_path = f"thumbnails/{user_id}.jpg"
-    rclone_conf = f"rclone/{user_id}.conf"
-    token_pickle = f"tokens/{user_id}.pickle"
-    yt_cookie_path = f"cookies/{user_id}/cookies.txt"
+    file_tag = f"tmv_{user_id}" if _is_tmv_scope() else f"{user_id}"
+    thumb_path = f"thumbnails/{file_tag}.jpg"
+    rclone_conf = f"rclone/{file_tag}.conf"
+    token_pickle = f"tokens/{file_tag}.pickle"
+    yt_cookie_path = f"cookies/{file_tag}/cookies.txt"
 
-    user_dict = user_data.get(user_id, {})
+    user_dict = _get_ud(user_id)
     if user_id != int(data[1]):
         return await query.answer("This menu is not for you!", show_alert=True)
     elif data[2] == "setevent":
@@ -2829,7 +2903,7 @@ async def edit_user_settings(client, query):
         await update_user_settings(query, data[2])
     elif data[2] == "thumb_mode":
         mode = data[3]
-        update_user_ldata(user_id, "THUMBNAIL_MODE", mode)
+        _set_ud(user_id, "THUMBNAIL_MODE", mode)
         await database.update_user_data(user_id)
         if mode == "custom" and not await aiopath.exists(thumb_path):
             await query.answer("Please set a custom thumbnail image!", show_alert=True)
@@ -2838,7 +2912,7 @@ async def edit_user_settings(client, query):
         await update_user_settings(query, "thumb_select")
     elif data[2] == "thumb_hd":
         enabled = not bool(user_dict.get("HD_THUMBNAIL", False))
-        update_user_ldata(user_id, "HD_THUMBNAIL", enabled)
+        _set_ud(user_id, "HD_THUMBNAIL", enabled)
         await database.update_user_data(user_id)
         await query.answer(f"HD thumbnail {'enabled' if enabled else 'disabled'}")
         await update_user_settings(query, "thumb_select")
@@ -2887,10 +2961,10 @@ async def edit_user_settings(client, query):
         await update_user_settings(query, data[2])
     elif data[2] == "wm_color_select":
         await query.answer()
-        user_dict = user_data.get(user_id, {})
+        user_dict = _get_ud(user_id)
         if len(data) > 3:
             new_color = data[3]
-            update_user_ldata(user_id, "WM_COLOR", new_color)
+            _set_ud(user_id, "WM_COLOR", new_color)
             await database.update_user_data(user_id)
             await update_user_settings(query, "watermark_menu")
         else:
@@ -2899,17 +2973,17 @@ async def edit_user_settings(client, query):
             colors = ["white", "black", "red", "green", "blue", "yellow", "cyan", "magenta"]
             for col in colors:
                 state = "✓ " if col == curr_color else ""
-                buttons.data_button(f"{state}{col.capitalize()}", f"userset {user_id} wm_color_select {col}")
-            buttons.data_button("Custom Hex Color", f"userset {user_id} menu WM_COLOR", "header")
-            buttons.data_button("◀️ Back", f"userset {user_id} watermark_menu", "footer")
-            buttons.data_button("❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
+                buttons.data_button(f"{state}{col.capitalize()}", f"{_cb_prefix()} {user_id} wm_color_select {col}")
+            buttons.data_button("Custom Hex Color", f"{_cb_prefix()} {user_id} menu WM_COLOR", "header")
+            buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} watermark_menu", "footer")
+            buttons.data_button("❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER)
             await edit_message(message, "<b>🎨 Select Text Watermark Color:</b>", buttons.build_menu(2))
     elif data[2] == "thumb_wm_color_select":
         await query.answer()
-        user_dict = user_data.get(user_id, {})
+        user_dict = _get_ud(user_id)
         if len(data) > 3:
             new_color = data[3]
-            update_user_ldata(user_id, "THUMB_WM_COLOR", new_color)
+            _set_ud(user_id, "THUMB_WM_COLOR", new_color)
             await database.update_user_data(user_id)
             await update_user_settings(query, "thumb_wm_menu")
         else:
@@ -2918,18 +2992,18 @@ async def edit_user_settings(client, query):
             colors = ["white", "black", "red", "green", "blue", "yellow", "cyan", "magenta"]
             for col in colors:
                 state = "✓ " if col == curr_color else ""
-                buttons.data_button(f"{state}{col.capitalize()}", f"userset {user_id} thumb_wm_color_select {col}")
-            buttons.data_button("Custom Hex Color", f"userset {user_id} menu THUMB_WM_COLOR", "header")
-            buttons.data_button("◀️ Back", f"userset {user_id} thumb_wm_menu", "footer")
-            buttons.data_button("❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
+                buttons.data_button(f"{state}{col.capitalize()}", f"{_cb_prefix()} {user_id} thumb_wm_color_select {col}")
+            buttons.data_button("Custom Hex Color", f"{_cb_prefix()} {user_id} menu THUMB_WM_COLOR", "header")
+            buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} thumb_wm_menu", "footer")
+            buttons.data_button("❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER)
             await edit_message(message, "<b>🎨 Select Thumbnail Text Watermark Color:</b>", buttons.build_menu(2))
     elif data[2] in ["thumb_wm_img_pos_select", "thumb_wm_text_pos_select"]:
         await query.answer()
-        user_dict = user_data.get(user_id, {})
+        user_dict = _get_ud(user_id)
         opt_key = "THUMB_WM_IMAGE_POSITION" if data[2] == "thumb_wm_img_pos_select" else "THUMB_WM_TEXT_POSITION"
         if len(data) > 3:
             new_pos = data[3]
-            update_user_ldata(user_id, opt_key, new_pos)
+            _set_ud(user_id, opt_key, new_pos)
             await database.update_user_data(user_id)
             await update_user_settings(query, "thumb_wm_menu")
         else:
@@ -2942,19 +3016,19 @@ async def edit_user_settings(client, query):
             ]
             for pos in positions:
                 state = "✓ " if pos == curr_pos else ""
-                buttons.data_button(f"{state}{pos}", f"userset {user_id} {data[2]} {pos}")
-            buttons.data_button("◀️ Back", f"userset {user_id} thumb_wm_menu", "footer")
-            buttons.data_button("❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
+                buttons.data_button(f"{state}{pos}", f"{_cb_prefix()} {user_id} {data[2]} {pos}")
+            buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} thumb_wm_menu", "footer")
+            buttons.data_button("❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER)
             title = "🖼️ Image" if "img" in data[2] else "📝 Text"
             await edit_message(message, f"<b>📍 Select Thumbnail {title} Watermark Position:</b>", buttons.build_menu(3))
     elif data[2] == "intro_sub_anim_select":
         await query.answer()
-        user_dict = user_data.get(user_id, {})
+        user_dict = _get_ud(user_id)
         if len(data) > 3:
             idx_str = data[3]
             if idx_str.isdigit() and 0 <= int(idx_str) < len(INTRO_ANIMATIONS):
                 chosen = INTRO_ANIMATIONS[int(idx_str)]
-                update_user_ldata(user_id, "INTRO_SUB_ANIMATION", chosen)
+                _set_ud(user_id, "INTRO_SUB_ANIMATION", chosen)
                 await database.update_user_data(user_id)
             await update_user_settings(query, "intro_sub_menu")
         else:
@@ -2964,10 +3038,10 @@ async def edit_user_settings(client, query):
                 state = "✓ " if anim_name == curr_anim else ""
                 buttons.data_button(
                     f"{state}{anim_name}",
-                    f"userset {user_id} intro_sub_anim_select {idx}",
+                    f"{_cb_prefix()} {user_id} intro_sub_anim_select {idx}",
                 )
-            buttons.data_button("◀️ Back", f"userset {user_id} intro_sub_menu", "footer")
-            buttons.data_button("❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
+            buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} intro_sub_menu", "footer")
+            buttons.data_button("❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER)
             await edit_message(
                 message,
                 f"<b>✨ Select Intro Subtitle Animation (PowerPoint Effects)</b>\n\n"
@@ -2977,12 +3051,12 @@ async def edit_user_settings(client, query):
             )
     elif data[2] == "intro_sub_trans_select":
         await query.answer()
-        user_dict = user_data.get(user_id, {})
+        user_dict = _get_ud(user_id)
         if len(data) > 3:
             idx_str = data[3]
             if idx_str.isdigit() and 0 <= int(idx_str) < len(INTRO_TRANSITIONS):
                 chosen = INTRO_TRANSITIONS[int(idx_str)]
-                update_user_ldata(user_id, "INTRO_SUB_TRANSITION", chosen)
+                _set_ud(user_id, "INTRO_SUB_TRANSITION", chosen)
                 await database.update_user_data(user_id)
             await update_user_settings(query, "intro_sub_menu")
         else:
@@ -2992,10 +3066,10 @@ async def edit_user_settings(client, query):
                 state = "✓ " if trans_name == curr_trans else ""
                 buttons.data_button(
                     f"{state}{trans_name}",
-                    f"userset {user_id} intro_sub_trans_select {idx}",
+                    f"{_cb_prefix()} {user_id} intro_sub_trans_select {idx}",
                 )
-            buttons.data_button("◀️ Back", f"userset {user_id} intro_sub_menu", "footer")
-            buttons.data_button("❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
+            buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} intro_sub_menu", "footer")
+            buttons.data_button("❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER)
             await edit_message(
                 message,
                 f"<b>🎞️ Select Intro Subtitle Transition (PowerPoint Effects)</b>\n\n"
@@ -3005,13 +3079,13 @@ async def edit_user_settings(client, query):
             )
     elif data[2] in ["intro_sub_text_pos_select", "intro_sub_img_pos_select"]:
         await query.answer()
-        user_dict = user_data.get(user_id, {})
+        user_dict = _get_ud(user_id)
         is_text_pos = data[2] == "intro_sub_text_pos_select"
         opt_key = "INTRO_SUB_TEXT_POSITION" if is_text_pos else "INTRO_SUB_IMAGE_POSITION"
         default_pos = "Bottom-Center" if is_text_pos else "Top-Right"
         if len(data) > 3:
             new_pos = normalize_position_name(data[3], default=default_pos)
-            update_user_ldata(user_id, opt_key, new_pos)
+            _set_ud(user_id, opt_key, new_pos)
             await database.update_user_data(user_id)
             await update_user_settings(query, "intro_sub_menu")
         else:
@@ -3019,9 +3093,9 @@ async def edit_user_settings(client, query):
             buttons = ButtonMaker()
             for pos in INTRO_POSITIONS:
                 state = "✓ " if pos == curr_pos else ""
-                buttons.data_button(f"{state}{pos}", f"userset {user_id} {data[2]} {pos}")
-            buttons.data_button("◀️ Back", f"userset {user_id} intro_sub_menu", "footer")
-            buttons.data_button("❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
+                buttons.data_button(f"{state}{pos}", f"{_cb_prefix()} {user_id} {data[2]} {pos}")
+            buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} intro_sub_menu", "footer")
+            buttons.data_button("❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER)
             label = "📝 Text" if is_text_pos else "🖼️ Image"
             await edit_message(
                 message,
@@ -3031,11 +3105,11 @@ async def edit_user_settings(client, query):
             )
     elif data[2] == "intro_sub_font_select":
         await query.answer()
-        user_dict = user_data.get(user_id, {})
+        user_dict = _get_ud(user_id)
         if len(data) > 3:
             style_key = data[3]
             if style_key in UNICODE_FONT_STYLES:
-                update_user_ldata(user_id, "INTRO_SUB_FONT_STYLE", style_key)
+                _set_ud(user_id, "INTRO_SUB_FONT_STYLE", style_key)
                 await database.update_user_data(user_id)
             await update_user_settings(query, "intro_sub_menu")
         else:
@@ -3045,10 +3119,10 @@ async def edit_user_settings(client, query):
                 state = "✓ " if style_key == curr_style else ""
                 buttons.data_button(
                     f"{state}{style_label}",
-                    f"userset {user_id} intro_sub_font_select {style_key}",
+                    f"{_cb_prefix()} {user_id} intro_sub_font_select {style_key}",
                 )
-            buttons.data_button("◀️ Back", f"userset {user_id} intro_sub_menu", "footer")
-            buttons.data_button("❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
+            buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} intro_sub_menu", "footer")
+            buttons.data_button("❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER)
             await edit_message(
                 message,
                 "<b>🔤 Select Intro Subtitle Unicode Font Style:</b>\n\n"
@@ -3057,11 +3131,11 @@ async def edit_user_settings(client, query):
             )
     elif data[2] in ["wm_img_pos_select", "wm_text_pos_select", "wm_pos_select"]:
         await query.answer()
-        user_dict = user_data.get(user_id, {})
+        user_dict = _get_ud(user_id)
         opt_key = "WM_IMAGE_POSITION" if data[2] == "wm_img_pos_select" else ("WM_TEXT_POSITION" if data[2] == "wm_text_pos_select" else "WM_POSITION")
         if len(data) > 3:
             new_pos = data[3]
-            update_user_ldata(user_id, opt_key, new_pos)
+            _set_ud(user_id, opt_key, new_pos)
             await database.update_user_data(user_id)
             await update_user_settings(query, "watermark_menu")
         else:
@@ -3074,14 +3148,14 @@ async def edit_user_settings(client, query):
             ]
             for pos in positions:
                 state = "✓ " if pos == curr_pos else ""
-                buttons.data_button(f"{state}{pos}", f"userset {user_id} {data[2]} {pos}")
-            buttons.data_button("◀️ Back", f"userset {user_id} watermark_menu", "footer")
-            buttons.data_button("❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
+                buttons.data_button(f"{state}{pos}", f"{_cb_prefix()} {user_id} {data[2]} {pos}")
+            buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} watermark_menu", "footer")
+            buttons.data_button("❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER)
             title = "🖼️ Image" if "img" in data[2] else ("📝 Text" if "text" in data[2] else "")
             await edit_message(message, f"<b>📍 Select {title} Watermark Position:</b>", buttons.build_menu(3))
     elif data[2] == "uphoster_destinations":
         await query.answer()
-        user_dict = user_data.get(user_id, {})
+        user_dict = _get_ud(user_id)
         uphoster_service = user_dict.get("UPHOSTER_SERVICE", "gofile")
         selected_services = uphoster_service.split(",") if uphoster_service else []
 
@@ -3097,7 +3171,7 @@ async def edit_user_settings(client, query):
             else:
                 selected_services.append(service)
             new_services = ",".join(selected_services)
-            update_user_ldata(user_id, "UPHOSTER_SERVICE", new_services)
+            _set_ud(user_id, "UPHOSTER_SERVICE", new_services)
             await database.update_user_data(user_id)
             selected_services = new_services.split(",")
         else:
@@ -3118,19 +3192,19 @@ async def edit_user_settings(client, query):
             state = "✓" if service in selected_services else ""
             buttons.data_button(
                 f"{service.capitalize()} {state}",
-                f"userset {user_id} uphoster_destinations {service}",
+                f"{_cb_prefix()} {user_id} uphoster_destinations {service}",
             )
 
-        buttons.data_button("◀️ Back", f"userset {user_id} back uphoster", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back uphoster", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
 
         text = "<b>🌐 Select Active Uphoster Destinations:</b>"
         await edit_message(message, text, buttons.build_menu(2))
     elif data[2] == "session_menu":
         await query.answer()
-        user_dict = user_data.get(user_id, {})
+        user_dict = _get_ud(user_id)
         mode = user_dict.get("TELEGRAM_SESSION_MODE", "disabled")
         labels = {
             "telegram": "Telegram Links",
@@ -3140,30 +3214,30 @@ async def edit_user_settings(client, query):
         }
         buttons = ButtonMaker()
         if user_dict.get("TELEGRAM_SESSION_STRING"):
-            buttons.data_button("✏️ Change Session String", f"userset {user_id} session_set")
-            buttons.data_button("🗑️ Reset Session String", f"userset {user_id} session_reset")
+            buttons.data_button("✏️ Change Session String", f"{_cb_prefix()} {user_id} session_set")
+            buttons.data_button("🗑️ Reset Session String", f"{_cb_prefix()} {user_id} session_reset")
             buttons.data_button(
                 f"Telegram Links: {'✓' if mode in ('telegram', 'both') else '✗'}",
-                f"userset {user_id} session_mode telegram",
+                f"{_cb_prefix()} {user_id} session_mode telegram",
             )
             buttons.data_button(
                 f"Upload: {'✓' if mode in ('upload', 'both') else '✗'}",
-                f"userset {user_id} session_mode upload",
+                f"{_cb_prefix()} {user_id} session_mode upload",
             )
             buttons.data_button(
                 f"Both: {'✓' if mode == 'both' else '✗'}",
-                f"userset {user_id} session_mode both",
+                f"{_cb_prefix()} {user_id} session_mode both",
             )
-            buttons.data_button("Disable", f"userset {user_id} session_mode disabled")
+            buttons.data_button("Disable", f"{_cb_prefix()} {user_id} session_mode disabled")
             current = labels.get(mode, "Disabled")
             status = "Configured"
         else:
-            buttons.data_button("➕ Set Session String", f"userset {user_id} session_set")
+            buttons.data_button("➕ Set Session String", f"{_cb_prefix()} {user_id} session_set")
             current = "Disabled"
             status = "Not configured"
-        buttons.data_button("◀️ Back", f"userset {user_id} advanced", "footer")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} advanced", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         await edit_message(
             message,
@@ -3181,12 +3255,12 @@ The session string is a private login credential and is never shown back.</block
     elif data[2] == "session_mode":
         await query.answer()
         mode = data[3] if len(data) > 3 else "disabled"
-        user_dict = user_data.get(user_id, {})
+        user_dict = _get_ud(user_id)
         if mode not in {"disabled", "telegram", "upload", "both"}:
             return
         if mode != "disabled" and not user_dict.get("TELEGRAM_SESSION_STRING"):
             return await query.answer("Set a session string first.", show_alert=True)
-        update_user_ldata(user_id, "TELEGRAM_SESSION_MODE", mode)
+        _set_ud(user_id, "TELEGRAM_SESSION_MODE", mode)
         await database.update_user_data(user_id)
         if mode == "disabled":
             await TgClient.stop_personal_user(user_id)
@@ -3194,7 +3268,7 @@ The session string is a private login credential and is never shown back.</block
         await update_user_settings(query, stype="advanced")
     elif data[2] == "session_reset":
         await query.answer("Resetting personal session...", show_alert=False)
-        user_dict = user_data.get(user_id, {})
+        user_dict = _get_ud(user_id)
         user_dict.pop("TELEGRAM_SESSION_STRING", None)
         user_dict.pop("TELEGRAM_SESSION_MODE", None)
         await TgClient.reset_personal_user(user_id)
@@ -3203,10 +3277,10 @@ The session string is a private login credential and is never shown back.</block
     elif data[2] == "session_set":
         await query.answer()
         buttons = ButtonMaker()
-        buttons.data_button("Stop", f"userset {user_id} session_menu")
-        buttons.data_button("◀️ Back", f"userset {user_id} session_menu", "footer")
+        buttons.data_button("Stop", f"{_cb_prefix()} {user_id} session_menu")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} session_menu", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         await edit_message(
             message,
@@ -3230,10 +3304,10 @@ The session string is a private login credential and is never shown back.</block
                     "❌ Session validation failed. The session was not saved.",
                 )
                 return
-            update_user_ldata(user_id, "TELEGRAM_SESSION_STRING", session)
-            cur_mode = user_data.get(user_id, {}).get("TELEGRAM_SESSION_MODE")
+            _set_ud(user_id, "TELEGRAM_SESSION_STRING", session)
+            cur_mode = _get_ud(user_id).get("TELEGRAM_SESSION_MODE")
             if not cur_mode or cur_mode == "disabled":
-                update_user_ldata(user_id, "TELEGRAM_SESSION_MODE", "both")
+                _set_ud(user_id, "TELEGRAM_SESSION_MODE", "both")
             await database.update_user_data(user_id)
             await send_message(msg, "✅ Personal Telegram session saved and validated.")
             await update_user_settings(query, stype="advanced")
@@ -3264,10 +3338,10 @@ The session string is a private login credential and is never shown back.</block
         await query.answer()
         buttons = ButtonMaker()
         back_target = origin if origin in ("leech", "mirror", "uphoster") else "SET_ALL_METADATA"
-        back_callback = f"userset {user_id} menu SET_ALL_METADATA" if back_target == "SET_ALL_METADATA" else f"userset {user_id} back {back_target}"
+        back_callback = f"{_cb_prefix()} {user_id} menu SET_ALL_METADATA" if back_target == "SET_ALL_METADATA" else f"{_cb_prefix()} {user_id} back {back_target}"
         buttons.data_button("Stop", back_callback)
         buttons.data_button("◀️ Back", back_callback, "footer")
-        buttons.data_button("❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
+        buttons.data_button("❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER)
         await edit_message(
             message,
             "<b>📝 Set One Value for Every Metadata Field</b>\n\n"
@@ -3283,8 +3357,8 @@ The session string is a private login credential and is never shown back.</block
                 await send_message(incoming, "Please send a non-empty value.")
                 return
             all_values = {field_key: raw for field_key, _ in METADATA_FIELD_OPTIONS}
-            update_user_ldata(user_id, "SET_ALL_METADATA", all_values)
-            update_user_ldata(user_id, "SET_ALL_METADATA_ENABLE", True)
+            _set_ud(user_id, "SET_ALL_METADATA", all_values)
+            _set_ud(user_id, "SET_ALL_METADATA_ENABLE", True)
             await delete_message(incoming)
             await database.update_user_data(user_id)
             await get_menu(back_target, message, user_id)
@@ -3299,20 +3373,20 @@ The session string is a private login credential and is never shown back.</block
         field_label = next((label for key, label in METADATA_FIELD_OPTIONS if key == field_key), field_key)
         await query.answer()
         buttons = ButtonMaker()
-        buttons.data_button("Stop", f"userset {user_id} menu {option} stop")
-        buttons.data_button("◀️ Back", f"userset {user_id} menu {option}", "footer")
-        buttons.data_button("❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
+        buttons.data_button("Stop", f"{_cb_prefix()} {user_id} menu {option} stop")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} menu {option}", "footer")
+        buttons.data_button("❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER)
         await edit_message(message, f"<b>Configure {escape(field_label)}</b>\n\nSend the value for this field. Send <code>-</code> to clear it.", buttons.build_menu(1))
         async def _save_metadata_field(_, incoming):
             raw = (incoming.text or "").strip()
-            current = MetadataProcessor.parse_string(user_data.get(user_id, {}).get(option, {}))
+            current = MetadataProcessor.parse_string(_get_ud(user_id).get(option, {}))
             if raw == "-":
                 current.pop(field_key, None)
             elif raw:
                 current[field_key] = raw
-            update_user_ldata(user_id, option, current)
+            _set_ud(user_id, option, current)
             if option == "SET_ALL_METADATA":
-                update_user_ldata(user_id, "SET_ALL_METADATA_ENABLE", True)
+                _set_ud(user_id, "SET_ALL_METADATA_ENABLE", True)
             await delete_message(incoming)
             await rfunc_meta()
             await database.update_user_data(user_id)
@@ -3324,7 +3398,7 @@ The session string is a private login credential and is never shown back.</block
         await get_menu("FFMPEG_CMDS", message, user_id, start=start)
     elif data[2] == "tog":
         if data[3] == "SET_ALL_METADATA_ENABLE" and data[4] == "t":
-            configured_all_meta = user_data.get(user_id, {}).get("SET_ALL_METADATA") or getattr(Config, "SET_ALL_METADATA", None)
+            configured_all_meta = _get_ud(user_id).get("SET_ALL_METADATA") or getattr(Config, "SET_ALL_METADATA", None)
             if not configured_all_meta:
                 return await query.answer(
                     "Configure All Metadata first, then enable it.", show_alert=True
@@ -3337,7 +3411,7 @@ The session string is a private login credential and is never shown back.</block
                     show_alert=True,
                 )
         await query.answer()
-        update_user_ldata(user_id, data[3], data[4] == "t")
+        _set_ud(user_id, data[3], data[4] == "t")
         if len(data) > 5:
             back_to = data[5]
         else:
@@ -3377,10 +3451,10 @@ The session string is a private login credential and is never shown back.</block
         await query.answer()
         buttons = ButtonMaker()
         text = user_settings_text[data[3]][2]
-        buttons.data_button("Stop", f"userset {user_id} menu {data[3]} stop")
-        buttons.data_button("◀️ Back", f"userset {user_id} menu {data[3]}", "footer")
+        buttons.data_button("Stop", f"{_cb_prefix()} {user_id} menu {data[3]} stop")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} menu {data[3]}", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         prompt_title = data[3].replace("_", " ").title()
         new_message_text = f"<b>Upload {prompt_title}</b>\n\n{text}"
@@ -3408,10 +3482,10 @@ The session string is a private login credential and is never shown back.</block
         elif data[2] == "rmone":
             text = f"<blockquote><b>Remove entry from {data[3]}:</b>\nExample: <code>key1/key2</code>\n⏱️ <b>Time Left:</b> <code>60 sec</code></blockquote>"
             func = remove_one
-        buttons.data_button("Stop", f"userset {user_id} menu {data[3]} stop")
-        buttons.data_button("◀️ Back", f"userset {user_id} menu {data[3]}", "footer")
+        buttons.data_button("Stop", f"{_cb_prefix()} {user_id} menu {data[3]} stop")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} menu {data[3]}", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         await edit_message(
             message, message.text.html + "\n\n" + text, buttons.build_menu(1)
@@ -3448,14 +3522,14 @@ The session string is a private login credential and is never shown back.</block
                 await remove(fpath)
             user_dict.pop(data[3], None)
             if data[3] == "THUMBNAIL":
-                update_user_ldata(user_id, "THUMBNAIL_MODE", "none")
+                _set_ud(user_id, "THUMBNAIL_MODE", "none")
             await database.update_user_doc(user_id, data[3])
         else:
-            update_user_ldata(user_id, data[3], "")
+            _set_ud(user_id, data[3], "")
             if data[3] == "MEGA_EMAIL":
-                update_user_ldata(user_id, "MEGA_PASSWORD", "")
+                _set_ud(user_id, "MEGA_PASSWORD", "")
             elif data[3] == "SEEDR_EMAIL":
-                update_user_ldata(user_id, "SEEDR_PASSWORD", "")
+                _set_ud(user_id, "SEEDR_PASSWORD", "")
             await database.update_user_data(user_id)
         if data[3] == "THUMBNAIL":
             await update_user_settings(query, "thumb_select")
@@ -3469,17 +3543,17 @@ The session string is a private login credential and is never shown back.</block
     elif data[2] == "confirm_reset_all":
         await query.answer()
         buttons = ButtonMaker()
-        buttons.data_button("Yes, Reset", f"userset {user_id} do_reset_all yes")
-        buttons.data_button("No, Cancel", f"userset {user_id} do_reset_all no")
+        buttons.data_button("Yes, Reset", f"{_cb_prefix()} {user_id} do_reset_all yes")
+        buttons.data_button("No, Cancel", f"{_cb_prefix()} {user_id} do_reset_all no")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         text = "<blockquote><b>⚠️ Warning:</b> Are you sure you want to reset all your personal user settings? This action cannot be undone.</blockquote>"
         await edit_message(query.message, text, buttons.build_menu(2))
     elif data[2] == "do_reset_all":
         if data[3] == "yes":
             await query.answer("All user settings reset!", show_alert=True)
-            user_dict = user_data.get(user_id, {})
+            user_dict = _get_ud(user_id)
             for k in list(user_dict.keys()):
                 if k not in ("SUDO", "AUTH", "VERIFY_TOKEN", "VERIFY_TIME"):
                     del user_dict[k]
@@ -3552,10 +3626,10 @@ The session string is a private login credential and is never shown back.</block
     elif data[2] == "import_settings":
         await query.answer()
         buttons = ButtonMaker()
-        buttons.data_button("Stop", f"userset {user_id} back main")
-        buttons.data_button("◀️ Back", f"userset {user_id} back main", "footer")
+        buttons.data_button("Stop", f"{_cb_prefix()} {user_id} back main")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} back main", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         prompt_text = f"<b>Import User Settings Backup</b>\n\n<blockquote><b>📥 Action Required:</b> Send your exported <code>US{user_id}.zip</code> file to restore configurations.\n⏱️ <b>Time Left:</b> <code>60 sec</code></blockquote>"
         await edit_message(message, prompt_text, buttons.build_menu(1))
@@ -3591,7 +3665,7 @@ The session string is a private login credential and is never shown back.</block
                             )
                             for k, v in settings_data.items():
                                 if k not in forbidden_keys:
-                                    update_user_ldata(user_id, k, v)
+                                    _set_ud(user_id, k, v)
 
                     for member in namelist:
                         if member == "settings.json" or member.endswith("/"):
@@ -3606,28 +3680,28 @@ The session string is a private login credential and is never shown back.</block
                             await makedirs("thumbnails", exist_ok=True)
                             with open(dest, "wb") as f:
                                 f.write(data_bytes)
-                            update_user_ldata(user_id, "THUMBNAIL", dest)
+                            _set_ud(user_id, "THUMBNAIL", dest)
                             await database.update_user_doc(user_id, "THUMBNAIL", dest)
                         elif norm_member == "rclone.conf" or norm_member.startswith("rclone/"):
                             dest = f"rclone/{user_id}.conf"
                             await makedirs("rclone", exist_ok=True)
                             with open(dest, "wb") as f:
                                 f.write(data_bytes)
-                            update_user_ldata(user_id, "RCLONE_CONFIG", dest)
+                            _set_ud(user_id, "RCLONE_CONFIG", dest)
                             await database.update_user_doc(user_id, "RCLONE_CONFIG", dest)
                         elif norm_member == "token.pickle" or norm_member.startswith("tokens/"):
                             dest = f"tokens/{user_id}.pickle"
                             await makedirs("tokens", exist_ok=True)
                             with open(dest, "wb") as f:
                                 f.write(data_bytes)
-                            update_user_ldata(user_id, "TOKEN_PICKLE", dest)
+                            _set_ud(user_id, "TOKEN_PICKLE", dest)
                             await database.update_user_doc(user_id, "TOKEN_PICKLE", dest)
                         elif norm_member == "cookies.txt" or norm_member.startswith("cookies/"):
                             dest = f"cookies/{user_id}/cookies.txt"
                             await makedirs(f"cookies/{user_id}", exist_ok=True)
                             with open(dest, "wb") as f:
                                 f.write(data_bytes)
-                            update_user_ldata(user_id, "USER_COOKIE_FILE", dest)
+                            _set_ud(user_id, "USER_COOKIE_FILE", dest)
                             await database.update_user_doc(user_id, "USER_COOKIE_FILE", dest)
 
                 await database.update_user_data(user_id)
@@ -3653,22 +3727,22 @@ The session string is a private login credential and is never shown back.</block
             await database.update_user_data(user_id)
     elif data[2] == "tog_audio_split":
         await query.answer()
-        update_user_ldata(user_id, "AUDIO_SPLIT_ENABLED", not bool(user_dict.get("AUDIO_SPLIT_ENABLED", False)))
+        _set_ud(user_id, "AUDIO_SPLIT_ENABLED", not bool(user_dict.get("AUDIO_SPLIT_ENABLED", False)))
         await update_user_settings(query, stype="vtools")
         await database.update_user_data(user_id)
     elif data[2] == "audio_split_mode":
         await query.answer()
         requested_mode = str(data[3]).lower() if len(data) > 3 else "auto"
-        update_user_ldata(user_id, "AUDIO_SPLIT_MODE", "manual" if requested_mode == "manual" else "auto")
+        _set_ud(user_id, "AUDIO_SPLIT_MODE", "manual" if requested_mode == "manual" else "auto")
         await update_user_settings(query, stype="vtools")
         await database.update_user_data(user_id)
     elif data[2] == "tog_audio_split_suffix":
         await query.answer()
-        update_user_ldata(user_id, "AUDIO_SPLIT_LANGUAGE_SUFFIX", not bool(user_dict.get("AUDIO_SPLIT_LANGUAGE_SUFFIX", False)))
+        _set_ud(user_id, "AUDIO_SPLIT_LANGUAGE_SUFFIX", not bool(user_dict.get("AUDIO_SPLIT_LANGUAGE_SUFFIX", False)))
         await update_user_settings(query, stype="vtools")
         await database.update_user_data(user_id)
     elif data[2] == "audio_split_languages_clear":
-        update_user_ldata(user_id, "AUDIO_SPLIT_LANGUAGES", "")
+        _set_ud(user_id, "AUDIO_SPLIT_LANGUAGES", "")
         await database.update_user_data(user_id)
         await query.answer("Saved Audio Split languages cleared")
         await update_user_settings(query, stype="vtools")
@@ -3676,12 +3750,12 @@ The session string is a private login credential and is never shown back.</block
         await query.answer()
         current_langs = user_dict.get("AUDIO_SPLIT_LANGUAGES", "") or "Not configured"
         buttons = ButtonMaker()
-        buttons.data_button("Stop", f"userset {user_id} vtools")
+        buttons.data_button("Stop", f"{_cb_prefix()} {user_id} vtools")
         if user_dict.get("AUDIO_SPLIT_LANGUAGES"):
-            buttons.data_button("🗑️ Clear Languages", f"userset {user_id} audio_split_languages_clear")
-        buttons.data_button("◀️ Back", f"userset {user_id} vtools", "footer")
+            buttons.data_button("🗑️ Clear Languages", f"{_cb_prefix()} {user_id} audio_split_languages_clear")
+        buttons.data_button("◀️ Back", f"{_cb_prefix()} {user_id} vtools", "footer")
         buttons.data_button(
-            "❌ Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
+            "❌ Close", f"{_cb_prefix()} {user_id} close", "footer", style=ButtonStyle.DANGER
         )
         prompt_text = (
             "<b>🎧 Set Audio Split Languages (Manual Mode)</b>\n\n"
@@ -3717,8 +3791,8 @@ The session string is a private login credential and is never shown back.</block
                         deduped.append(part)
                 value = ",".join(deduped)
             handler_dict[user_id] = False
-            update_user_ldata(user_id, "AUDIO_SPLIT_LANGUAGES", value)
-            update_user_ldata(user_id, "AUDIO_SPLIT_MODE", "manual")
+            _set_ud(user_id, "AUDIO_SPLIT_LANGUAGES", value)
+            _set_ud(user_id, "AUDIO_SPLIT_MODE", "manual")
             with suppress(Exception):
                 await delete_message(msg)
             await update_user_settings(query, stype="vtools")
@@ -3730,28 +3804,28 @@ The session string is a private login credential and is never shown back.</block
         await event_handler(client, query, save_audio_split_languages, cancel_audio_split_languages)
     elif data[2] == "set_merge_mode":
         await query.answer()
-        update_user_ldata(user_id, "AUTO_MERGE_MODE", data[3])
+        _set_ud(user_id, "AUTO_MERGE_MODE", data[3])
         await update_user_settings(query, stype="vtools")
         await database.update_user_data(user_id)
     elif data[2] == "split_mode":
         await query.answer()
-        update_user_ldata(user_id, "SPLIT_MODE", data[3])
+        _set_ud(user_id, "SPLIT_MODE", data[3])
         await update_user_settings(query, stype="leech")
         await database.update_user_data(user_id)
     elif data[2] == "name_source":
         await query.answer()
-        update_user_ldata(user_id, "NAME_SOURCE", data[3])
+        _set_ud(user_id, "NAME_SOURCE", data[3])
         await update_user_settings(query, stype="advanced")
         await database.update_user_data(user_id)
     elif data[2] == "range_mode":
         await query.answer()
-        update_user_ldata(user_id, "RANGE_LINK_MODE", data[3])
+        _set_ud(user_id, "RANGE_LINK_MODE", data[3])
         await update_user_settings(query, stype="advanced")
         await database.update_user_data(user_id)
     elif data[2] in ["gd", "rc"]:
         await query.answer()
         du = "rc" if data[2] == "gd" else "gd"
-        update_user_ldata(user_id, "DEFAULT_UPLOAD", du)
+        _set_ud(user_id, "DEFAULT_UPLOAD", du)
         await update_user_settings(query, stype="general")
         await database.update_user_data(user_id)
     elif data[2] == "back":

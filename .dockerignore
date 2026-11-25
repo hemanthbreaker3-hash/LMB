@@ -35,3 +35,7 @@ rlog.txt
 cfg.zip
 configs/sabnzbd/SABnzbd.ini
 configs/qbittorrent/**
+.sessions
+.sessions/**
+logs
+logs/**

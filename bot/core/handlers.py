@@ -519,7 +519,7 @@ async def add_handlers():
         )
     )
     TgClient.bot.add_handler(
-        CallbackQueryHandler(edit_user_settings, filters=regex("^userset"))
+        CallbackQueryHandler(edit_user_settings, filters=regex("^(?:userset|tmvset)"))
     )
     TgClient.bot.add_handler(
         MessageHandler(

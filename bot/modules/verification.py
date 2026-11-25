@@ -570,7 +570,7 @@ async def verification_guard(_, update):
     # DM-delivery action available; other pre-verification callbacks are blocked.
     if getattr(update, "data", None) is not None:
         data = str(update.data)
-        if data.startswith(("start pass ", "verifydm:", "userset ")):
+        if data.startswith(("start pass ", "verifydm:", "userset ", "tmvset ")):
             raise ContinuePropagation
         if not _user_verified(user_id):
             try:
