@@ -358,6 +358,8 @@ async def user_interval_check(user_id):
 
 
 async def pre_task_check(message):
+    if getattr(message, "_tmv_monitor", False):
+        return None, None
     LOGGER.info("Running Pre Task Checks ...")
     msg = []
     button = None

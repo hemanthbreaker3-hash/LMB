@@ -605,6 +605,9 @@ class Mirror(TaskListener):
 
         path = f"{DOWNLOAD_DIR}{self.mid}{self.folder_name}"
 
+        if not self.link and getattr(self.message, "_tmv_torrent_path", None):
+            self.link = self.message._tmv_torrent_path
+
         if not self.link and (reply_to := self.message.reply_to_message):
             reply_text = (reply_to.text or reply_to.caption or "").strip()
             entities = (reply_to.entities or []) + (reply_to.caption_entities or [])

@@ -11,6 +11,7 @@ from os import makedirs, path as ospath
 import re
 from secrets import token_hex
 from time import time
+from types import SimpleNamespace
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
@@ -61,6 +62,7 @@ BAD_IMG_WORDS = (
 _MONITOR_TASKS: dict[int, object] = {}
 _DEAD_TOPICS: set[str] = set()
 _TOPIC_PICKERS: dict[str, dict] = {}
+_FAIL_COUNTS: dict[str, int] = {}
 _INPUT_WAIT_TIMEOUT = 120
 
 
@@ -297,28 +299,45 @@ def _parse_topic_sync(scraper, topic_url: str, forum_url: str = ""):
     }
 
 
-def crawl_tbl_sync(base_domains: str, max_topics: int = 15):
+def crawl_tbl_sync(base_domains: str, max_topics: int = 30):
     scraper = _create_scraper()
     candidates = _parse_domains_list(base_domains)
     resp = None
     active_base = ""
+
+    def _has_forum_topics(html_text: str) -> bool:
+        return bool(html_text and re.search(r"index\.php\?/forums/topic/", html_text, re.IGNORECASE))
 
     for dom in candidates:
         try:
             forum_url = f"{dom}/index.php?/forums/topic/"
             r = scraper.get(forum_url, timeout=20, headers={"Referer": dom})
             r.raise_for_status()
-            resp = r
-            active_base = dom
-            break
-        except Exception:
+            if _has_forum_topics(r.text):
+                resp = r
+                active_base = dom
+                break
+            LOGGER.warning("TMV domain %s returned 200 without forum topic links (possible challenge)", dom)
+        except Exception as exc:
+            LOGGER.warning("TMV domain %s fetch failed: %s", dom, exc)
             continue
 
     if resp is None:
         active_base = discover_active_domain_sync()
         forum_url = f"{active_base}/index.php?/forums/topic/"
-        resp = scraper.get(forum_url, timeout=20, headers={"Referer": active_base})
-        resp.raise_for_status()
+        try:
+            r = scraper.get(forum_url, timeout=20, headers={"Referer": active_base})
+            r.raise_for_status()
+            if _has_forum_topics(r.text):
+                resp = r
+            else:
+                LOGGER.warning("TMV discovered domain %s returned 200 without topic links", active_base)
+        except Exception as exc:
+            LOGGER.warning("TMV crawl failed on discovered domain %s: %s", active_base, exc)
+            return [], active_base, False
+
+    if resp is None:
+        return [], active_base, False
 
     soup = BeautifulSoup(resp.text, "html.parser")
     recently_added_links, other_banger_links, general_links = [], [], []
@@ -354,26 +373,30 @@ def crawl_tbl_sync(base_domains: str, max_topics: int = 15):
     topic_links = top_links + rest_links
     scan_limit = len(top_links) + max_topics
 
-    from concurrent.futures import ThreadPoolExecutor
-
     target_urls = [u for u in topic_links[:scan_limit] if _norm(u) not in _DEAD_TOPICS]
     forum_ref = f"{active_base}/index.php?/forums/topic/"
-
-    def _fetch_one(t_url):
-        try:
-            return _parse_topic_sync(_create_scraper(), t_url, forum_ref)
-        except Exception as exc:
-            LOGGER.debug("TMV topic parse skipped %s: %s", t_url, exc)
-            return None
+    LOGGER.info(
+        "TMV crawl: active_base=%s, found=%d topics (top=%d, recent=%d), scanning=%d",
+        active_base,
+        len(topic_links),
+        len(top_links),
+        len(_dedupe(recently_added_links)),
+        len(target_urls),
+    )
 
     topics = []
-    if target_urls:
-        with ThreadPoolExecutor(max_workers=min(6, len(target_urls))) as pool:
-            for res in pool.map(_fetch_one, target_urls):
-                if res:
-                    topics.append(res)
+    for t_url in target_urls:
+        try:
+            # Reuse the same scraper session so Cloudflare cookies from the forum page persist.
+            res = _parse_topic_sync(scraper, t_url, forum_ref)
+            if res:
+                topics.append(res)
+        except Exception as exc:
+            LOGGER.warning("TMV topic parse failed %s: %s", t_url, exc)
 
-    return topics, active_base
+    crawl_ok = bool(topics) or not topic_links
+    LOGGER.info("TMV crawl completed on %s: parsed %d topic(s) with releases", active_base, len(topics))
+    return topics, active_base, crawl_ok
 
 
 def _resolve_cyberloom_sync(url: str) -> str:
@@ -454,6 +477,8 @@ async def _dispatch_release_to_lmb(
 ):
     from .mirror_leech import Mirror
 
+    from ..core.torrent_manager import TorrentManager
+
     cfg = _get_tmv_cfg(uid)
     dl_mode = cfg.get("download_mode", "all")
     target_link, torrent_file_path, use_qbit = await _pick_single_release_source(
@@ -461,6 +486,9 @@ async def _dispatch_release_to_lmb(
     )
     if not target_link:
         return False
+    if use_qbit and TorrentManager.qbittorrent is None:
+        LOGGER.warning("TMV: qBittorrent client unavailable; falling back to Aria2 for %s", rel.get("title"))
+        use_qbit = False
 
     target_chat = chat_id or uid
     is_leech = True
@@ -519,42 +547,74 @@ async def _dispatch_release_to_lmb(
     flag_str = " ".join(flags).strip()
     if torrent_file_path and ospath.isfile(torrent_file_path):
         cmd_text = f"/{cmd_name} {flag_str}".strip()
-        tor_msg = await TgClient.bot.send_document(
-            chat_id=target_chat,
-            document=torrent_file_path,
-            caption=f"🎬 <b>{escape(rel['title'])}</b> ({escape(str(rel.get('size', 'Unknown')))})",
-            disable_notification=True,
-        )
-        synth = await send_message(tor_msg, cmd_text)
+        try:
+            tor_msg = await TgClient.bot.send_document(
+                chat_id=target_chat,
+                document=torrent_file_path,
+                caption=f"🎬 <b>{escape(rel['title'])}</b> ({escape(str(rel.get('size', 'Unknown')))})",
+                disable_notification=True,
+            )
+            synth = await send_message(tor_msg, cmd_text)
+        except Exception as exc:
+            LOGGER.warning("TMV send_document failed (%s); sending direct command", exc)
+            synth = await send_message(target_chat, cmd_text)
     else:
         cmd_text = f"/{cmd_name} {target_link} {flag_str}".strip()
         synth = await send_message(target_chat, cmd_text)
 
     if not isinstance(synth, Message):
+        LOGGER.warning("TMV dispatch failed to create synthetic message for %s: %r", rel.get("title"), synth)
         return False
 
     with suppress(Exception):
-        synth = await TgClient.bot.get_messages(chat_id=target_chat, message_ids=synth.id)
+        fetched = await TgClient.bot.get_messages(chat_id=target_chat, message_ids=synth.id)
+        if isinstance(fetched, Message):
+            synth = fetched
 
     if getattr(synth, "from_user", None) is None or synth.from_user.id != uid:
-        with suppress(Exception):
+        try:
             synth.from_user = await TgClient.bot.get_users(uid)
+        except Exception as exc:
+            LOGGER.warning("TMV get_users(%s) failed (%s); using synthetic user", uid, exc)
+            synth.from_user = SimpleNamespace(
+                id=uid,
+                first_name=f"User {uid}",
+                username=None,
+                is_bot=False,
+                mention=lambda style="html": f'<a href="tg://user?id={uid}">User {uid}</a>',
+            )
+
+    if torrent_file_path and ospath.isfile(torrent_file_path):
+        setattr(synth, "_tmv_torrent_path", torrent_file_path)
 
     if mode_override is None:
+        setattr(synth, "_tmv_monitor", True)
         setattr(synth, "_tmv_auto_extract", True)
         if cfg.get("settings_mode") == "independent":
             setattr(synth, "_tmv_overrides", dict(cfg.get("independent", {})))
     if cfg.get("dumps"):
         setattr(synth, "_tmv_dump_rules", list(cfg.get("dumps", [])))
 
-    await Mirror(
-        TgClient.bot,
-        synth,
-        is_qbit=use_qbit,
-        is_leech=is_leech,
-        is_uphoster=is_uphoster,
-    ).new_event()
-    return True
+    LOGGER.info(
+        "TMV dispatching [%s]: '%s' (qbit=%s, leech=%s, uphoster=%s)",
+        uid,
+        rel.get("title"),
+        use_qbit,
+        is_leech,
+        is_uphoster,
+    )
+    try:
+        await Mirror(
+            TgClient.bot,
+            synth,
+            is_qbit=use_qbit,
+            is_leech=is_leech,
+            is_uphoster=is_uphoster,
+        ).new_event()
+        return True
+    except Exception as exc:
+        LOGGER.exception("TMV Mirror.new_event failed for %s: %s", rel.get("title"), exc)
+        return False
 
 
 async def _run_tmv_cycle(uid: int, force_notify: bool = False) -> tuple[int, str]:
@@ -562,8 +622,13 @@ async def _run_tmv_cycle(uid: int, force_notify: bool = False) -> tuple[int, str
     if cfg.get("paused"):
         return 0, "Monitor is paused. Click Resume to continue."
     base_url = cfg.get("domain") or cfg.get("active_domain") or ""
-    topics, active_base = await to_thread(crawl_tbl_sync, base_url, 15)
-    cfg["active_domain"] = active_base
+    topics, active_base, crawl_ok = await to_thread(crawl_tbl_sync, base_url, 30)
+    if active_base:
+        cfg["active_domain"] = active_base
+
+    if not crawl_ok or not topics:
+        LOGGER.warning("TMV monitor [%s]: crawl returned no topics on %s (crawl_ok=%s); skipping state update.", uid, active_base, crawl_ok)
+        return 0, f"Could not fetch releases from <code>{escape(active_base or DEFAULT_BASE_URL)}</code>. Will retry next cycle."
 
     seen_links = list(cfg.get("seen_links", []))
     seen_links_set = set(seen_links)
@@ -587,38 +652,69 @@ async def _run_tmv_cycle(uid: int, force_notify: bool = False) -> tuple[int, str
             seen_topics_set.add(tid)
             seen_topics.append(tid)
 
+    if is_first_run:
+        for topic in topics:
+            t_url = topic.get("topic_url", "")
+            if t_url:
+                _remember_topic(t_url)
+            for rel in topic.get("releases", []):
+                for l in _rel_links(rel):
+                    _remember_link(l)
+        cfg["baseline_initialized"] = True
+        cfg["seen_links"] = seen_links[-5000:]
+        cfg["seen_topics"] = seen_topics[-2000:]
+        await _save_tmv_cfg(uid)
+        LOGGER.info(
+            "TMV monitor [%s]: baseline initialized on %s (%d topics, %d links). Waiting for new incoming releases.",
+            uid,
+            active_base,
+            len(topics),
+            len(seen_links),
+        )
+        return 0, f"Baseline cached on <code>{escape(active_base)}</code> ({len(topics)} topics). Only new incoming releases will download."
+
+    pending_topics = sum(
+        1 for t in topics
+        if any(_norm(l) not in seen_links_set for r in t.get("releases", []) for l in _rel_links(r))
+    )
+    LOGGER.info("TMV monitor [%s]: %d/%d topics have new incoming releases.", uid, pending_topics, len(topics))
+
     dispatched = 0
     for topic in topics:
         t_url = topic.get("topic_url", "")
         releases = topic.get("releases", [])
         poster_url = topic.get("poster_url")
 
-        if is_first_run:
-            if t_url:
-                _remember_topic(t_url)
-            for rel in releases:
-                for l in _rel_links(rel):
-                    _remember_link(l)
-            continue
-
         new_releases = [
             rel for rel in releases
-            if _rel_links(rel) and all(_norm(l) not in seen_links_set for l in _rel_links(rel))
+            if _rel_links(rel) and any(_norm(l) not in seen_links_set for l in _rel_links(rel))
         ]
         if not new_releases:
             if t_url:
                 _remember_topic(t_url)
             continue
 
+        all_handled = True
         for rel in new_releases[:5]:
             ok = await _dispatch_release_to_lmb(uid, rel, poster_url, active_base)
+            rel_keys = [_norm(l) for l in _rel_links(rel) if _norm(l)]
             if ok:
                 dispatched += 1
-            for l in _rel_links(rel):
-                _remember_link(l)
+                for l in _rel_links(rel):
+                    _remember_link(l)
+                for rk in rel_keys:
+                    _FAIL_COUNTS.pop(f"{uid}:{rk}", None)
+            else:
+                all_handled = False
+                for rk in rel_keys:
+                    fkey = f"{uid}:{rk}"
+                    _FAIL_COUNTS[fkey] = _FAIL_COUNTS.get(fkey, 0) + 1
+                    if _FAIL_COUNTS[fkey] >= 3:
+                        _remember_link(rk)
+                        _FAIL_COUNTS.pop(fkey, None)
             await sleep(1.0)
 
-        if t_url:
+        if t_url and all_handled:
             _remember_topic(t_url)
 
     cfg["baseline_initialized"] = True
@@ -626,8 +722,6 @@ async def _run_tmv_cycle(uid: int, force_notify: bool = False) -> tuple[int, str
     cfg["seen_topics"] = seen_topics[-2000:]
     await _save_tmv_cfg(uid)
 
-    if is_first_run and force_notify:
-        return 0, f"Baseline cached on <code>{escape(active_base)}</code>. Only new incoming releases will download."
     return dispatched, f"Checked <code>{escape(active_base)}</code> — queued <b>{dispatched}</b> new release(s)."
 
 
@@ -639,9 +733,10 @@ async def _tmv_monitor_loop(uid: int):
             break
         if not cfg.get("paused"):
             try:
-                await _run_tmv_cycle(uid)
+                dispatched, note = await _run_tmv_cycle(uid)
+                LOGGER.info("TMV monitor [%s]: cycle finished (dispatched=%d)", uid, dispatched)
             except Exception as exc:
-                LOGGER.warning("TMV monitor cycle error for %s: %s", uid, exc)
+                LOGGER.warning("TMV monitor cycle error for %s: %s", uid, exc, exc_info=True)
         interval = max(60, int(cfg.get("interval", 360) or 360))
         await sleep(interval)
     _MONITOR_TASKS.pop(uid, None)
