@@ -382,7 +382,7 @@ def _resolve_cyberloom_sync(url: str) -> str:
     try:
         scraper = _create_scraper()
         r = scraper.get(url, timeout=15, allow_redirects=True)
-        if r.url and "cyberloom" not in r.url.lower():
+        if r.url and "cyberloom" not in r.url.lower() and "google.com/search" not in r.url.lower():
             return r.url
         soup = BeautifulSoup(r.text, "html.parser")
         for a in soup.find_all("a", href=True):

@@ -40,7 +40,7 @@ async def add_handlers():
         MessageHandler(
             tmv_command,
             filters=command(BotCommands.TmvCommand, case_sensitive=False)
-            & CustomFilters.authorized,
+            & CustomFilters.authorized_uset,
         )
     )
     TgClient.bot.add_handler(

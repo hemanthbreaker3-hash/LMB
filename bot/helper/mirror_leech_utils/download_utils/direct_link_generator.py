@@ -5,7 +5,7 @@ from http.cookiejar import MozillaCookieJar
 from json import loads
 from lxml.etree import HTML
 from os import path as ospath
-from re import findall, match, search, sub
+from re import I as re_I, compile as re_compile, findall, match, search, search as re_search, sub
 from niquests import Session, post, get
 from niquests.adapters import HTTPAdapter
 from time import sleep, time
@@ -209,6 +209,8 @@ def direct_link_generator(link, user_id=None):
         return uploadee(link)
     elif "gofile.io" in domain:
         return gofile(link)
+    elif any(x in domain for x in ["stackmint.ink", "inkvoyage.xyz", "cyberloom"]) or "/go?t=" in link.lower():
+        return popup_redirect_bypass(link)
     elif "send.cm" in domain:
         return send_cm(link)
     elif "tmpsend.com" in domain:
@@ -2587,3 +2589,74 @@ def debrid_link(url):
                 details["total_size"] += dl["size"]
             details["contents"].append(item)
         return details
+
+
+def popup_redirect_bypass(url):
+    """Resolve /go?t= / cyberloom pop-up redirectors and block ad/search-engine traps."""
+    from urllib.parse import urlparse as _urlparse
+    from bs4 import BeautifulSoup as _BS
+
+    _AD_TRAP_HOSTS = (
+        "google.com",
+        "www.google.com",
+        "bing.com",
+        "www.bing.com",
+        "search.yahoo.com",
+        "duckduckgo.com",
+        "doubleclick.net",
+    )
+
+    try:
+        scraper = create_scraper()
+        resp = scraper.get(url, timeout=20, allow_redirects=True)
+    except Exception as e:
+        raise DirectDownloadLinkException(f"ERROR: Failed to resolve redirect link: {e}") from e
+
+    final_url = (resp.url or "").strip()
+    parsed = _urlparse(final_url)
+    if parsed.netloc.lower() in _AD_TRAP_HOSTS or "/search?" in final_url.lower():
+        raise DirectDownloadLinkException(
+            "ERROR: Pop-up/ad redirect link resolved to a search page instead of a file. "
+            "Use the magnet, .torrent, or direct file host link instead."
+        )
+
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+    if ctype and "text/html" not in ctype and "application/xhtml" not in ctype:
+        return final_url
+
+    text = resp.text or ""
+    soup = _BS(text, "html.parser")
+
+    meta = soup.find("meta", attrs={"http-equiv": re_compile(r"refresh", re_I)})
+    if meta and meta.get("content"):
+        m = re_search(r"url=([^;\s\x27\x22]+)", meta["content"], re_I)
+        if m:
+            cand = m.group(1).strip()
+            if cand.startswith("http") and _urlparse(cand).netloc.lower() not in _AD_TRAP_HOSTS:
+                return cand
+
+    for pat in (
+        r"window\.location(?:\.href)?\s*=\s*[\x27\x22](https?://[^\x27\x22]+)[\x27\x22]",
+        r"location\.replace\(\s*[\x27\x22](https?://[^\x27\x22]+)[\x27\x22]\s*\)",
+    ):
+        m = re_search(pat, text, re_I)
+        if m:
+            cand = m.group(1).strip()
+            if _urlparse(cand).netloc.lower() not in _AD_TRAP_HOSTS:
+                return cand
+
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if not href.startswith(("http://", "https://")):
+            continue
+        low_href = href.lower()
+        if _urlparse(low_href).netloc in _AD_TRAP_HOSTS or "/search?" in low_href:
+            continue
+        label = a.get_text(" ", strip=True).lower()
+        if any(k in label or k in low_href for k in ("download", "direct", "get link", "continue", "file")):
+            if not any(bad in low_href for bad in ("stackmint.ink", "inkvoyage.xyz")):
+                return href
+
+    raise DirectDownloadLinkException(
+        "ERROR: Pop-up redirect page did not yield a downloadable file link."
+    )
