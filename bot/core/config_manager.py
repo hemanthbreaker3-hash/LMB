@@ -336,9 +336,9 @@ class Config:
             env_value = getenv(key)
             if env_value is None and key == "CMD_SUFFIX":
                 env_value = getenv("cmd_suffix")
-            # Empty exports should not erase a working config.py fallback.
-            # A non-empty environment value always wins over config.py.
-            if env_value is not None and str(env_value).strip() != "":
+            # Empty exports should not erase a working config.py fallback,
+            # except CMD_SUFFIX where an explicit empty string clears a suffix.
+            if env_value is not None and (str(env_value).strip() != "" or key == "CMD_SUFFIX"):
                 converted_value = cls._convert_env_type(key, env_value)
                 cls.set(key, converted_value)
 
