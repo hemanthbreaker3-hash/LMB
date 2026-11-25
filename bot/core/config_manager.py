@@ -195,7 +195,7 @@ class Config:
     SEARCH_PLUGINS = []
     SET_COMMANDS = True
     STATUS_LIMIT = 10
-    STATUS_UPDATE_INTERVAL = 5
+    STATUS_UPDATE_INTERVAL = 8  # higher under multi-user load; reduces FloodWait on status edits
     STOP_DUPLICATE = False
     STREAMWISH_API = ""
     SUDO_USERS = ""

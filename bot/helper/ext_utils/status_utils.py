@@ -1,4 +1,5 @@
 from asyncio import gather, iscoroutinefunction
+from contextvars import ContextVar
 from html import escape
 from pyrogram.enums import ButtonStyle
 from re import findall
@@ -18,6 +19,10 @@ from ...core.config_manager import Config
 from ..telegram_helper.button_build import ButtonMaker
 
 SIZE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"]
+
+# When set, status views show only TMV tasks (True) or exclude them (False).
+# None = show everything (legacy behaviour for callers that do not set it).
+_STATUS_TMV_FILTER: ContextVar[bool | None] = ContextVar("_STATUS_TMV_FILTER", default=None)
 
 
 class MirrorStatus:
@@ -107,16 +112,40 @@ async def get_task_by_gid(gid: str):
         return None
 
 
-async def get_specific_tasks(status, user_id):
+async def get_specific_tasks(status, user_id, tmv_only=None, exclude_tmv=None):
+    # Prefer explicit args; otherwise honour the ContextVar set by /status vs /tstatus.
+    ctx_filter = _STATUS_TMV_FILTER.get()
+    if tmv_only is None and exclude_tmv is None and ctx_filter is not None:
+        tmv_only = bool(ctx_filter)
+        exclude_tmv = not bool(ctx_filter)
+    tmv_only = bool(tmv_only)
+    exclude_tmv = bool(exclude_tmv)
+
+    def _match_tmv(tk):
+        is_tmv = bool(getattr(tk.listener, "is_tmv", False))
+        if tmv_only:
+            return is_tmv
+        if exclude_tmv:
+            return not is_tmv
+        return True
+
     if status == "All":
         if user_id:
-            return [tk for tk in task_dict.values() if tk.listener.user_id == user_id]
+            return [
+                tk
+                for tk in task_dict.values()
+                if tk.listener.user_id == user_id and _match_tmv(tk)
+            ]
         else:
-            return list(task_dict.values())
+            return [tk for tk in task_dict.values() if _match_tmv(tk)]
     tasks_to_check = (
-        [tk for tk in task_dict.values() if tk.listener.user_id == user_id]
+        [
+            tk
+            for tk in task_dict.values()
+            if tk.listener.user_id == user_id and _match_tmv(tk)
+        ]
         if user_id
-        else list(task_dict.values())
+        else [tk for tk in task_dict.values() if _match_tmv(tk)]
     )
     coro_tasks = []
     coro_tasks.extend(tk for tk in tasks_to_check if iscoroutinefunction(tk.status))

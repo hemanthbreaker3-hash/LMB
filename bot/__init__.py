@@ -2,6 +2,8 @@
 import os as _os
 _os.environ.setdefault("CBGRAM_RUST_CORE", "1")
 _os.environ.setdefault("CBGRAM_UVLOOP", "1")
+_os.environ.setdefault("CBGRAM_MAX_CONCURRENT", "1024")
+_os.environ.setdefault("CBGRAM_WORKERS", "256")
 
 try:
     from uvloop import install

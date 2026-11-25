@@ -6,6 +6,7 @@ from ast import literal_eval
 from cbgram import Client
 from pyrogram import enums
 from pyrogram.errors import FloodWait, PeerIdInvalid, ChannelInvalid
+from ..helper.ext_utils.flood_guard import note_floodwait, wait_if_needed
 from asyncio import Lock, gather, sleep
 from hashlib import sha256
 from inspect import signature
@@ -31,7 +32,10 @@ except OSError:
 # CBGRAM_UVLOOP=1 enables uvloop on Linux and macOS.
 os.environ.setdefault("CBGRAM_RUST_CORE", "1")
 os.environ.setdefault("CBGRAM_UVLOOP", "1")
-os.environ.setdefault("CBGRAM_MAX_CONCURRENT", "512")
+# High-scale defaults for 10k+ concurrent users (cbgram.pages.dev + cbcrypto Rust core).
+# Override via env if the VPS is small: lower CBGRAM_MAX_CONCURRENT / CBGRAM_WORKERS.
+os.environ.setdefault("CBGRAM_MAX_CONCURRENT", "1024")
+os.environ.setdefault("CBGRAM_WORKERS", "256")
 
 _DB_PARTITION_SALT = b"wzmlx_v3_db_partition_salt"
 
@@ -79,6 +83,63 @@ class TgClient:
     PREMIUM_MAX_BYTES = PREMIUM_MAX_BYTES
     PREMIUM_CHUNK_BYTES = PREMIUM_CHUNK_BYTES
     MAX_SPLIT_SIZE = BOT_MAX_BYTES
+
+    @classmethod
+    def pick_least_loaded(cls, prefer_premium: bool = False):
+        """
+        Fair round-robin / least-loaded helper selection so every user gets
+        comparable download & upload speed under high concurrency.
+        Returns (client, kind) where kind is "user" | "huser" | "hbot" | "bot".
+        """
+        candidates = []
+        # Premium / user sessions first when large files need them
+        if prefer_premium and cls.user is not None:
+            candidates.append((cls.user, "user", 0))
+        for no, client in (cls.helper_users or {}).items():
+            load = int(cls.helper_user_loads.get(no, 0) or 0)
+            is_prem = bool(getattr(client, "_is_premium_cached", False))
+            if prefer_premium and not is_prem:
+                continue
+            candidates.append((client, "huser", load))
+        if not prefer_premium:
+            for no, client in (cls.helper_bots or {}).items():
+                load = int(cls.helper_loads.get(no, 0) or 0)
+                candidates.append((client, "hbot", load))
+            if cls.bot is not None:
+                candidates.append((cls.bot, "bot", 0))
+            if cls.user is not None:
+                candidates.append((cls.user, "user", 0))
+        if not candidates:
+            return cls.bot, "bot"
+        # Least load, then stable order
+        candidates.sort(key=lambda x: (x[2], x[1], id(x[0])))
+        client, kind, _ = candidates[0]
+        # Bump load counter for fairness
+        if kind == "huser":
+            for no, c in cls.helper_users.items():
+                if c is client:
+                    cls.helper_user_loads[no] = int(cls.helper_user_loads.get(no, 0) or 0) + 1
+                    break
+        elif kind == "hbot":
+            for no, c in cls.helper_bots.items():
+                if c is client:
+                    cls.helper_loads[no] = int(cls.helper_loads.get(no, 0) or 0) + 1
+                    break
+        return client, kind
+
+    @classmethod
+    def release_load(cls, client) -> None:
+        """Decrement load counter after a transfer finishes."""
+        if client is None:
+            return
+        for no, c in (cls.helper_users or {}).items():
+            if c is client:
+                cls.helper_user_loads[no] = max(0, int(cls.helper_user_loads.get(no, 0) or 0) - 1)
+                return
+        for no, c in (cls.helper_bots or {}).items():
+            if c is client:
+                cls.helper_loads[no] = max(0, int(cls.helper_loads.get(no, 0) or 0) - 1)
+                return
 
     @staticmethod
     def sanitize_proxy(proxy):
@@ -243,14 +304,17 @@ class TgClient:
         kwargs.setdefault("workdir", str(SESSION_STORAGE_DIR))
         kwargs["in_memory"] = False
         kwargs.setdefault("no_updates", True)
-        kwargs.setdefault("sleep_threshold", 60)
-        # High concurrency for simultaneous and bulk tasks via cbgram + cbcrypto Rust core.
+        # Auto-sleep only for very short waits; longer FloodWaits are handled by the
+        # global coordinator so the whole bot stays responsive under 10k+ users.
+        kwargs.setdefault("sleep_threshold", 30)
+        # High concurrency for simultaneous bulk tasks via cbgram + cbcrypto Rust core.
+        # https://cbgram.pages.dev/ — Rust engine for AES + file transfer path.
         for param, value in {
             "max_concurrent_transmissions": max(
-                1, int(os.environ.get("CBGRAM_MAX_CONCURRENT", "512"))
+                1, int(os.environ.get("CBGRAM_MAX_CONCURRENT", "1024"))
             ),
-            "workers": max(16, int(os.environ.get("CBGRAM_WORKERS", "128"))),
-            "sleep_threshold": kwargs.get("sleep_threshold", 60),
+            "workers": max(32, int(os.environ.get("CBGRAM_WORKERS", "256"))),
+            "sleep_threshold": kwargs.get("sleep_threshold", 30),
             "skip_updates": False,
             "auto_no_updates": True,
             "fetch_stories": False,
@@ -296,6 +360,10 @@ class TgClient:
             cls.helper_bots[no], cls.helper_loads[no] = hbot, 0
         except FloodWait as e:
             LOGGER.warning(f"Helper Bot{no} FloodWait: Retrying in {e.value}s...")
+            try:
+                bot_loop.create_task(note_floodwait(e.value, account=f"hbot{no}"))
+            except Exception:
+                pass
             bot_loop.create_task(cls._retry_hclient(no, b_token, e.value, proxy))
         except Exception as e:
             LOGGER.error(f"Failed to start helper bot {no} from HELPER_TOKENS. {e}")
@@ -318,6 +386,10 @@ class TgClient:
             LOGGER.warning(
                 f"Helper Bot{no} FloodWait: Retrying in {e.value}s (non-blocking)..."
             )
+            try:
+                bot_loop.create_task(note_floodwait(e.value, account=f"hbot{no}"))
+            except Exception:
+                pass
             bot_loop.create_task(cls._retry_hclient(no, b_token, e.value, proxy))
         except Exception as e:
             LOGGER.error(f"Failed to start helper bot {no} from HELPER_TOKENS. {e}")

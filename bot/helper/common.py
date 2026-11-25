@@ -205,6 +205,7 @@ class TaskConfig:
         self.user_dict = user_data.get(self.user_id, {})
         self.tmv_dump_rules = list(getattr(self.message, "_tmv_dump_rules", []) or [])
         self.tmv_auto_extract = bool(getattr(self.message, "_tmv_auto_extract", False))
+        self.is_tmv = bool(getattr(self.message, "_tmv_monitor", False))
         if tmv_ov := getattr(self.message, "_tmv_overrides", None):
             merged_ud = dict(self.user_dict)
             for k, v in tmv_ov.items():

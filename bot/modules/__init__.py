@@ -60,7 +60,7 @@ from .verification import (
 )
 from .shell import run_shell
 from .stats import bot_stats, stats_pages, get_packages_version
-from .status import task_status, status_pages
+from .status import task_status, status_pages, tmv_task_status
 from .users_settings import (
     get_users_settings,
     edit_user_settings,
@@ -173,6 +173,7 @@ __all__ = [
     "get_packages_version",
     "task_status",
     "status_pages",
+    "tmv_task_status",
     "get_users_settings",
     "edit_user_settings",
     "send_user_settings",

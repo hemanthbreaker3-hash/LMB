@@ -73,6 +73,7 @@ class BotCommands:
         "Mention": "mention",
         "GenSession": ["gensession", "gs"],
         "Tmv": "tmv",
+        "Tstatus": ["tstatus", "ts"],
     }
 
     @classmethod

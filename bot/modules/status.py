@@ -26,6 +26,7 @@ from ..helper.ext_utils.status_utils import (
     get_readable_file_size,
     get_readable_time,
     speed_string_to_bytes,
+    _STATUS_TMV_FILTER,
 )
 from ..helper.telegram_helper.bot_commands import BotCommands
 from ..helper.telegram_helper.message_utils import (
@@ -42,8 +43,13 @@ from ..helper.telegram_helper.button_build import ButtonMaker
 
 @new_task
 async def task_status(_, message):
+    # Main /status never shows 1TamilMV auto-leech tasks (use /tstatus or /ts).
+    _STATUS_TMV_FILTER.set(False)
     async with task_dict_lock:
-        count = len(task_dict)
+        count = len([
+            tk for tk in task_dict.values()
+            if not getattr(tk.listener, "is_tmv", False)
+        ])
     if count == 0:
         # A final refresh may not have run yet; remove the matching stale status card.
         command_args = (message.text or "").split()
@@ -354,3 +360,58 @@ async def status_pages(_, query):
         await query.answer()
     except QueryIdInvalid:
         pass
+
+
+@new_task
+async def tmv_task_status(_, message):
+    """Show only 1TamilMV / TMV auto-leech tasks. Main /status excludes them."""
+    _STATUS_TMV_FILTER.set(True)
+    async with task_dict_lock:
+        tmv_tasks = [
+            tk
+            for tk in task_dict.values()
+            if getattr(tk.listener, "is_tmv", False)
+        ]
+        count = len(tmv_tasks)
+    if count == 0:
+        currentTime = get_readable_time(time() - bot_start_time)
+        free = get_readable_file_size(disk_usage(DOWNLOAD_DIR).free)
+        msg = (
+            "<b>📊 /tmv Auto-Leech Status</b>\n\n"
+            "<i>No active 1TamilMV / TMV monitor tasks.</i>\n\n"
+            "<b>🖥 System</b>\n"
+            f"⚡ CPU: <b>{cpu_percent()}%</b>\n"
+            f"💾 Free disk: <b>{free}</b> ({round(100 - disk_usage(DOWNLOAD_DIR).percent, 1)}%)\n"
+            f"🧠 RAM: <b>{virtual_memory().percent}%</b>\n"
+            f"⏱️ Uptime: <b>{currentTime}</b>\n\n"
+            f"Use <code>/{BotCommands.StatusCommand[0]}</code> for normal (non-TMV) tasks."
+        )
+        reply_message = await send_message(message, msg)
+        await auto_delete_message(message, reply_message)
+        return
+
+    text = (message.text or "").split()
+    is_private = message.chat and message.chat.type == ChatType.PRIVATE
+    u_id = message.from_user.id if message.from_user else 0
+
+    if is_private:
+        is_sudo = u_id == Config.OWNER_ID or (u_id in user_data and user_data[u_id].get("SUDO"))
+        if len(text) > 1 and text[1].lstrip("-").isdigit() and is_sudo:
+            target_user_id = int(text[1])
+        else:
+            target_user_id = u_id
+    else:
+        if len(text) > 1:
+            if text[1] == "me":
+                target_user_id = u_id
+            elif text[1].lstrip("-").isdigit():
+                target_user_id = int(text[1])
+            else:
+                target_user_id = 0
+        else:
+            target_user_id = 0
+
+    # Reuse the standard status pipeline but force TMV-only view via a temporary attribute.
+    setattr(message, "_status_tmv_only", True)
+    await send_status_message(message, target_user_id, force_new=False)
+    await delete_message(message)

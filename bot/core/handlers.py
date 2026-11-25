@@ -489,6 +489,13 @@ async def add_handlers():
         )
     )
     TgClient.bot.add_handler(
+        MessageHandler(
+            tmv_task_status,
+            filters=command(BotCommands.TstatusCommand, case_sensitive=False)
+            & (CustomFilters.authorized | private),
+        )
+    )
+    TgClient.bot.add_handler(
         CallbackQueryHandler(status_pages, filters=regex("^status"))
     )
     TgClient.bot.add_handler(CallbackQueryHandler(stats_pages, filters=regex("^stats")))

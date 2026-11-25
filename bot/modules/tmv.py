@@ -87,6 +87,9 @@ def _default_tmv_settings() -> dict:
             "LEECH_SUFFIX": "",
             "LEECH_CAPTION": "",
             "LEECH_FONT": "none",
+            # Size limits (bytes). -1 = unlimited. Applies to monitor auto-leech releases.
+            "DOWNLOAD_SIZE_LIMIT": 4 * 1024 * 1024 * 1024,  # 4 GiB default
+            "ZIP_SIZE_LIMIT": -1,  # unlimited by default
         },
         "seen_links": [],
         "seen_topics": [],
@@ -481,6 +484,36 @@ async def _dispatch_release_to_lmb(
 
     cfg = _get_tmv_cfg(uid)
     dl_mode = cfg.get("download_mode", "all")
+    # Enforce per-user download / zip size limits for monitor auto-leech.
+    ind = cfg.get("independent") or {}
+    size_str = str(rel.get("size") or "").strip()
+    size_bytes = 0
+    if size_str:
+        try:
+            from ..helper.ext_utils.bot_utils import get_size_bytes
+            size_bytes = get_size_bytes(size_str) or 0
+        except Exception:
+            size_bytes = 0
+    is_zip_like = any(
+        x in (rel.get("title") or "").lower()
+        for x in (".zip", ".rar", ".7z", ".tar", ".gz")
+    ) or (size_str and any(x in size_str.lower() for x in ()))
+    limit_key = "ZIP_SIZE_LIMIT" if is_zip_like else "DOWNLOAD_SIZE_LIMIT"
+    limit_val = ind.get(limit_key, -1)
+    try:
+        limit_val = int(limit_val)
+    except (TypeError, ValueError):
+        limit_val = -1
+    if limit_val >= 0 and size_bytes > 0 and size_bytes > limit_val:
+        from ..helper.ext_utils.status_utils import get_readable_file_size
+        LOGGER.info(
+            "TMV skip oversized release [%s]: %s (%s > limit %s)",
+            uid,
+            rel.get("title"),
+            get_readable_file_size(size_bytes),
+            get_readable_file_size(limit_val),
+        )
+        return False
     target_link, torrent_file_path, use_qbit = await _pick_single_release_source(
         rel, dl_mode, active_base, uid
     )
@@ -1116,6 +1149,15 @@ def _build_independent_ui(uid: int):
     prefix = ind.get("LEECH_PREFIX") or "None"
     suffix = ind.get("LEECH_SUFFIX") or "None"
     caption = ind.get("LEECH_CAPTION") or "Default"
+    from ..helper.ext_utils.status_utils import get_readable_file_size as _grfs
+    def _fmt_limit(val):
+        try:
+            v = int(val)
+        except (TypeError, ValueError):
+            return "Unlimited"
+        return "Unlimited" if v < 0 else _grfs(v)
+    dl_limit = _fmt_limit(ind.get("DOWNLOAD_SIZE_LIMIT", 4 * 1024**3))
+    zip_limit = _fmt_limit(ind.get("ZIP_SIZE_LIMIT", -1))
 
     text_msg = (
         f"<b>🎛️ /tmv Independent Settings</b>\n\n"
@@ -1127,7 +1169,9 @@ def _build_independent_ui(uid: int):
         f"• <b>Link Filter:</b> <code>{dl_mode}</code>\n"
         f"• <b>Interval:</b> <code>{get_readable_time(interval)}</code>\n"
         f"• <b>Prefix:</b> <code>{escape(str(prefix))}</code> | <b>Suffix:</b> <code>{escape(str(suffix))}</code>\n"
-        f"• <b>Caption:</b> <code>{escape(str(caption)[:40])}</code>"
+        f"• <b>Caption:</b> <code>{escape(str(caption)[:40])}</code>\n"
+        f"• <b>Download Size Limit:</b> <code>{dl_limit}</code>\n"
+        f"• <b>ZIP Size Limit:</b> <code>{zip_limit}</code>"
         f"</blockquote>"
     )
     btns = ButtonMaker()
@@ -1140,6 +1184,8 @@ def _build_independent_ui(uid: int):
     btns.data_button("✏️ Prefix", f"tmv {uid} ind_prefix")
     btns.data_button("✏️ Suffix", f"tmv {uid} ind_suffix")
     btns.data_button("📝 Caption", f"tmv {uid} ind_caption")
+    btns.data_button(f"📏 DL Limit: {dl_limit}", f"tmv {uid} ind_dllimit")
+    btns.data_button(f"📦 ZIP Limit: {zip_limit}", f"tmv {uid} ind_ziplimit")
     btns.data_button("🔄 Reset Defaults", f"tmv {uid} ind_reset")
     btns.data_button("🔙 Back", f"tmv {uid} settings", "footer")
     return text_msg, btns.build_menu(2)
@@ -1483,6 +1529,57 @@ async def tmv_callback(client, query):
         )
         if val is not None:
             ind["LEECH_CAPTION"] = "" if val.lower() == "none" else val
+            await _save_tmv_cfg(uid)
+    elif action == "ind_dllimit":
+        await query.answer()
+        val = await _wait_dm_input(
+            client,
+            uid,
+            msg,
+            "📏 <b>Set Download Size Limit</b>\n\n"
+            "Send size like <code>4GB</code>, <code>2048MB</code>, <code>5000000000</code> (bytes), "
+            "or <code>-1</code> / <code>unlimited</code> for no limit.\n"
+            "Applies to all non-archive monitor releases.",
+        )
+        if val is not None:
+            low = val.strip().lower()
+            if low in ("-1", "unlimited", "none", "0"):
+                ind["DOWNLOAD_SIZE_LIMIT"] = -1
+            else:
+                try:
+                    from ..helper.ext_utils.bot_utils import get_size_bytes
+                    parsed = get_size_bytes(val.strip())
+                    if parsed is None or parsed < 0:
+                        raise ValueError("bad size")
+                    ind["DOWNLOAD_SIZE_LIMIT"] = int(parsed)
+                except Exception:
+                    await send_message(msg, "❌ Invalid size. Examples: 4GB, 2GiB, 500MB, -1")
+                    return
+            await _save_tmv_cfg(uid)
+    elif action == "ind_ziplimit":
+        await query.answer()
+        val = await _wait_dm_input(
+            client,
+            uid,
+            msg,
+            "📦 <b>Set ZIP / Archive Size Limit</b>\n\n"
+            "Send size like <code>4GB</code>, <code>2048MB</code>, or <code>-1</code> / <code>unlimited</code> for no limit.\n"
+            "Applies when the release title looks like a zip/rar/7z/tar archive.",
+        )
+        if val is not None:
+            low = val.strip().lower()
+            if low in ("-1", "unlimited", "none", "0"):
+                ind["ZIP_SIZE_LIMIT"] = -1
+            else:
+                try:
+                    from ..helper.ext_utils.bot_utils import get_size_bytes
+                    parsed = get_size_bytes(val.strip())
+                    if parsed is None or parsed < 0:
+                        raise ValueError("bad size")
+                    ind["ZIP_SIZE_LIMIT"] = int(parsed)
+                except Exception:
+                    await send_message(msg, "❌ Invalid size. Examples: 4GB, 2GiB, 500MB, -1")
+                    return
             await _save_tmv_cfg(uid)
     elif action == "ind_reset":
         cfg["independent"] = dict(_default_tmv_settings()["independent"])
