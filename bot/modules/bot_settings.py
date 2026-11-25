@@ -1880,7 +1880,7 @@ async def load_config():
         env = f"WEB_ACCESS_PASSWORD={access_pwd} "
         bot_loop.create_task(
             cmd_exec(
-                f"{env}gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{port}",
+                f"{env}{sys.executable} -m gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{port}",
                 shell=True,
             )
         )

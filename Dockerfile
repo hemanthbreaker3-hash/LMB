@@ -8,7 +8,14 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 RUN test -x /wzvenv/bin/python || (echo "ERROR: base image does not provide /wzvenv/bin/python" >&2; exit 1)
 
 COPY requirements.txt .
-RUN apt-get update -qq && apt-get install -y build-essential gcc libc6-dev pkg-config && rm -rf /var/lib/apt/lists/* && \
+RUN apt-get update -qq && apt-get install -y \
+    build-essential gcc libc6-dev pkg-config \
+    libmagic1 libmagic-dev libffi-dev libssl-dev \
+    aria2 ffmpeg p7zip-full par2 rclone qbittorrent-nox sabnzbdplus \
+    cpulimit mediainfo curl procps lsof iproute2 git wget && \
+    (apt-cache show p7zip-rar >/dev/null 2>&1 && apt-get install -y p7zip-rar || true) && \
+    rm -rf /var/lib/apt/lists/* && \
+    command -v aria2c && command -v ffmpeg && command -v 7z && command -v rclone && \
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip uninstall --python /wzvenv/bin/python -y pyrogram kurigram pyrofork wzgram wzxpyro || true && \
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip install --python /wzvenv/bin/python --no-cache-dir -U -r requirements.txt && \
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip install --python /wzvenv/bin/python --no-cache-dir -U "cbgram[fast]" cbcrypto

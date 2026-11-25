@@ -1,3 +1,4 @@
+import sys
 from asyncio import create_subprocess_shell, gather, sleep
 from importlib import import_module
 from os import environ, path as ospath, getenv
@@ -439,7 +440,7 @@ async def load_configurations():
             LOGGER.error(f"Failed to configure qBittorrent: {e}")
         await TorrentManager._auth_qbit()
 
-    PORT = getenv("PORT", "") or "8080"
+    PORT = getenv("PORT", "") or getenv("BASE_URL_PORT", "") or str(getattr(Config, "BASE_URL_PORT", "") or "8080")
     if PORT:
         access_pwd = getenv("WEB_ACCESS_PASSWORD", "") or Config.WEB_ACCESS_PASSWORD
         if not access_pwd:
@@ -449,10 +450,10 @@ async def load_configurations():
             Config.WEB_ACCESS_PASSWORD = access_pwd
         env = f"WEB_ACCESS_PASSWORD={access_pwd} "
         bot_loop.create_task(cmd_exec(
-            f"{env}gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{PORT}",
+            f"{env}{sys.executable} -m gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{PORT}",
             shell=True,
         ))
-        bot_loop.create_task(cmd_exec("python3 cron_boot.py", shell=True))
+        bot_loop.create_task(cmd_exec(f"{sys.executable} cron_boot.py", shell=True))
 
     if Config.DISABLE_STREAM:
         LOGGER.info("Streaming is disabled. Skipping stream server.")
