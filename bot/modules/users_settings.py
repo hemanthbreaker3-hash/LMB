@@ -78,22 +78,44 @@ def _cb_prefix() -> str:
 
 
 def _get_ud(user_id: int) -> dict:
+    """Return the active settings dict for this user.
+
+    In TMV independent scope → TMV_SETTINGS["independent"].
+    Otherwise → the main user_data[user_id] dict (never recurse).
+    """
     if _is_tmv_scope():
         ud = user_data.setdefault(user_id, {})
         tmv_cfg = ud.setdefault("TMV_SETTINGS", {})
+        if not isinstance(tmv_cfg, dict):
+            tmv_cfg = {}
+            ud["TMV_SETTINGS"] = tmv_cfg
         ind = tmv_cfg.setdefault("independent", {})
+        if not isinstance(ind, dict):
+            ind = {}
+            tmv_cfg["independent"] = ind
         return ind
-    return _get_ud(user_id)
+    # Normal user settings — must NOT call _get_ud again
+    ud = user_data.setdefault(user_id, {})
+    if not isinstance(ud, dict):
+        ud = {}
+        user_data[user_id] = ud
+    return ud
 
 
 def _set_ud(user_id: int, key: str, value):
     if _is_tmv_scope():
         ud = user_data.setdefault(user_id, {})
         tmv_cfg = ud.setdefault("TMV_SETTINGS", {})
+        if not isinstance(tmv_cfg, dict):
+            tmv_cfg = {}
+            ud["TMV_SETTINGS"] = tmv_cfg
         ind = tmv_cfg.setdefault("independent", {})
+        if not isinstance(ind, dict):
+            ind = {}
+            tmv_cfg["independent"] = ind
         ind[key] = value
     else:
-        _set_ud(user_id, key, value)
+        user_data.setdefault(user_id, {})[key] = value
 
 
 
@@ -640,6 +662,17 @@ async def get_user_settings(from_user, stype="main"):
                 "♻️ Reset All", f"{_cb_prefix()} {user_id} confirm_reset_all", position="footer"
             )
         if is_tmv:
+            # Size limits live in independent dict (user_dict under TMV scope)
+            def _fmt_lim(val, default=-1):
+                try:
+                    v = int(val if val is not None else default)
+                except (TypeError, ValueError):
+                    return "Unlimited"
+                return "Unlimited" if v < 0 else get_readable_file_size(v)
+            dl_lim = _fmt_lim(user_dict.get("DOWNLOAD_SIZE_LIMIT"), 4 * 1024**3)
+            zip_lim = _fmt_lim(user_dict.get("ZIP_SIZE_LIMIT"), -1)
+            buttons.data_button(f"📏 DL Limit: {dl_lim}", f"tmv {user_id} ind_dllimit")
+            buttons.data_button(f"📦 ZIP Limit: {zip_lim}", f"tmv {user_id} ind_ziplimit")
             buttons.data_button("📤 Upload Dest", f"tmv {user_id} ind_updest", position="footer")
             buttons.data_button("🔗 Link Filter", f"tmv {user_id} ind_filter", position="footer")
             buttons.data_button("⏱️ Interval", f"tmv {user_id} ind_interval", position="footer")
@@ -656,12 +689,24 @@ async def get_user_settings(from_user, stype="main"):
             up_dest = user_dict.get("UPLOAD_DEST", "telegram")
             dl_mode = str(tmv_cfg.get("download_mode", "all")).upper()
             interval = int(tmv_cfg.get("interval", 360) or 360)
+            def _fmt_lim2(val, default=-1):
+                try:
+                    v = int(val if val is not None else default)
+                except (TypeError, ValueError):
+                    return "Unlimited"
+                return "Unlimited" if v < 0 else get_readable_file_size(v)
+            dl_lim = _fmt_lim2(user_dict.get("DOWNLOAD_SIZE_LIMIT"), 4 * 1024**3)
+            zip_lim = _fmt_lim2(user_dict.get("ZIP_SIZE_LIMIT"), -1)
             text = f"""<b>🎛️ /tmv Independent Settings</b>
 
 <blockquote>• <b>Upload Destination:</b> <code>{escape(str(up_dest))}</code>
 • <b>Link Filter:</b> <code>{dl_mode}</code>
 • <b>Check Interval:</b> <code>{interval}s</code>
-• <b>Scope:</b> Isolated from your main <code>/uset</code> configuration</blockquote>"""
+• <b>Download Size Limit:</b> <code>{dl_lim}</code>
+• <b>ZIP / Archive Limit:</b> <code>{zip_lim}</code>
+• <b>Scope:</b> Isolated from your main <code>/uset</code> configuration</blockquote>
+
+<i>Use 📏 DL Limit / 📦 ZIP Limit to set max size (−1 = unlimited). Oversized monitor releases are skipped.</i>"""
         else:
             text = f"""<b>👤 User Personal Settings</b>
 
@@ -669,7 +714,9 @@ async def get_user_settings(from_user, stype="main"):
 • <b>User ID:</b> <code>#ID{user_id}</code>
 • <b>Username:</b> @{from_user.username or 'N/A'}
 • <b>Telegram DC:</b> {from_user.dc_id or 'N/A'}
-• <b>Language:</b> {Language.get(lc).display_name() if (lc := from_user.language_code) else "N/A"}</blockquote>"""
+• <b>Language:</b> {Language.get(lc).display_name() if (lc := from_user.language_code) else "N/A"}</blockquote>
+
+<i>Configure leech, mirror, FFmpeg, uphoster and more from the buttons below.</i>"""
 
         btns = buttons.build_menu(2)
 

@@ -1052,6 +1052,24 @@ def _build_home_ui(uid: int):
     mode_label = "Independent" if cfg.get("settings_mode") == "independent" else "User Settings"
     dl_mode = str(cfg.get("download_mode", "all")).upper()
     interval = int(cfg.get("interval", 360) or 360)
+    ind = cfg.get("independent") or {}
+    from ..helper.ext_utils.status_utils import get_readable_file_size as _grfs
+
+    def _fmt_lim(val, default=-1):
+        try:
+            v = int(val if val is not None else default)
+        except (TypeError, ValueError):
+            return "Unlimited"
+        return "Unlimited" if v < 0 else _grfs(v)
+
+    dl_lim = _fmt_lim(ind.get("DOWNLOAD_SIZE_LIMIT"), 4 * 1024**3)
+    zip_lim = _fmt_lim(ind.get("ZIP_SIZE_LIMIT"), -1)
+    limits_line = ""
+    if cfg.get("settings_mode") == "independent":
+        limits_line = (
+            f"\n• <b>DL Limit:</b> <code>{dl_lim}</code>"
+            f"\n• <b>ZIP Limit:</b> <code>{zip_lim}</code>"
+        )
 
     text_msg = (
         f"<b>🎬 1TamilMV Auto-Leech (/tmv)</b>\n\n"
@@ -1063,7 +1081,9 @@ def _build_home_ui(uid: int):
         f"• <b>Link Filter:</b> <code>{dl_mode}</code>\n"
         f"• <b>Check Interval:</b> <code>{get_readable_time(interval)}</code>\n"
         f"• <b>Dump Rules:</b> <code>{len(cfg.get('dumps', []))}</code>"
-        f"</blockquote>"
+        f"{limits_line}"
+        f"</blockquote>\n\n"
+        f"<i>Auto-leech tasks: <code>/tstatus</code> or <code>/ts</code> (hidden from main /status).</i>"
     )
     btns = ButtonMaker()
     btns.data_button("🌐 Set Domain", f"tmv {uid} domain")
@@ -1080,6 +1100,9 @@ def _build_home_ui(uid: int):
     btns.data_button("🔄 Check Now", f"tmv {uid} checknow")
     btns.data_button("📥 Dumps", f"tmv {uid} dumps")
     btns.data_button("⚙️ Settings", f"tmv {uid} settings", style=ButtonStyle.PRIMARY)
+    if cfg.get("settings_mode") == "independent":
+        btns.data_button(f"📏 DL Limit: {dl_lim}", f"tmv {uid} ind_dllimit")
+        btns.data_button(f"📦 ZIP Limit: {zip_lim}", f"tmv {uid} ind_ziplimit")
     btns.data_button("❌ Close", f"tmv {uid} close", "footer", style=ButtonStyle.DANGER)
     return text_msg, btns.build_menu(2)
 

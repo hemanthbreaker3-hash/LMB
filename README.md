@@ -1,41 +1,44 @@
 # 💎 LMB — High-Speed Telegram Mirror & Leech Bot
 
-**LMB** is a high-speed Telegram Mirror & Leech Bot built for Linux VPS and Docker deployments. Powered by **`cbgram` `0.3.1`** + **`cbcrypto`** (compiled Rust MTProto crypto and transfer engine with `uvloop`), LMB delivers peak Telegram upload throughput from the very first tick alongside automated 1TamilMV monitoring, full media processing, and multi-host DDL uploads.
+**LMB** is a production-ready Telegram **Mirror / Leech** bot for Linux VPS and Docker.  
+It is powered by **[cbgram](https://cbgram.pages.dev/)** + **cbcrypto** (Rust MTProto crypto & transfer engine) for maximum upload/download speed under heavy multi-user load.
 
-## ⚡ Core Highlights
+---
 
-- **Max-Speed `cbgram 0.3.1` + `cbcrypto` Rust Engine:** Runs with `CBGRAM_RUST_CORE=1`, `CBGRAM_UVLOOP=1`, `CBGRAM_MAX_CONCURRENT=512`, `CBGRAM_WORKERS=128`, `BOT_THREAD_POOL_SIZE=256`, and parallel multi-part transfers (`max_parallel=16–64`) for instant full-bandwidth uploads.
-- **Smart Telegram Destination & Dump Routing:**
-  - Primary uploads use `USER_SESSION_STRING` to upload directly to `LEECH_LOG_CHAT` / `LEECH_DUMP_CHATS` (supports up to 4 GiB files with Telegram Premium).
-  - User DM delivery and additional dump fan-out always use `TgClient.bot` cleanly without duplicate copies.
-- **1TamilMV Auto-Leech (`/tmv`) & Quality Picker (`-tmv`):**
-  - `/tmv` (respecting `CMD_SUFFIX`) in DM lets every user manage custom/comma-separated domains, **Pause/Resume** incoming-only monitoring, **User Settings** vs **Independent Settings** (full `/uset`-parity isolated menu), **Upload Destination** (`Telegram`, `Mirror`, `Uphoster`), and unlimited keyword-based **Dump Rules** (`name | chat_id`, `.` for all files).
-  - `<topic_url> -tmv` opens a paginated quality picker with **Magnet**, **Torrent** (qBittorrent/Aria2), and **Cyberloom** filter tabs, cross-tab multi-select, and full flag support (`-e`, `-z`, `-d`, `-doc`, `-med`, `-n`, `-m`, `-up`, `-t`, etc.).
-- **Built-in `/gensession`:** Step-by-step `cbgram` session string generator in DM for admins (`API ID` → `API Hash` → `+countrycode` phone → `OTP` → `2FA`).
-- **DDL / Uphoster Support:** Native integrations for **GoFile**, **BuzzHeavier**, **PixelDrain**, **DevUploads**, **VikingFile**, and custom HTTP APIs, plus `/go?t=` pop-up redirect protection.
-- **Telegram Premium Emojis & Arrow-Flow UI:** Automatic BotFather/custom emoji pack syncing and clean `━━━━━━━➤────` arrow-flow progress bars.
+## ✨ Highlights
 
-## 🚀 Quick VPS Docker Deployment
+| Area | What you get |
+|------|----------------|
+| **Speed** | cbgram Rust core, Hyper multi-client transfers, full concurrency from the first part |
+| **Scale** | Tuned for high concurrent users (`CBGRAM_MAX_CONCURRENT=1024`, workers `256`) + shared FloodWait guard |
+| **1TamilMV** | `/tmv` auto-leech with Independent settings, **DL size limit**, **ZIP size limit**, dumps, domain auto-detect |
+| **Status** | Normal tasks → `/status` · TMV auto-leech only → `/tstatus` or `/ts` |
+| **Settings** | Full per-user `/uset` / `/us` menu (leech, mirror, FFmpeg, uphoster, watermark, …) |
+| **DDL** | GoFile, BuzzHeavier, PixelDrain, DevUploads, VikingFile, custom HTTP APIs |
 
-Export your credentials in the shell (shell exports always take top priority over `config.py` and `.env`), extract directly into your project directory, and run `./deploy.vps`:
+---
+
+## 🚀 Quick Deploy (VPS + Docker)
 
 ```bash
-unzip -o LMB-main-cbgram.zip && cp -rf LMB-main/* . && rm -rf LMB-main
+unzip -o LMB-*.zip && cp -rf LMB-main/* . && rm -rf LMB-main
 
 export BOT_TOKEN="123456:ABC..."
 export OWNER_ID="123456789"
 export TELEGRAM_API="1234567"
 export TELEGRAM_HASH="your_api_hash"
-export USER_SESSION_STRING="your_cbgram_session"   # optional, for >2 GiB & fast dump uploads
-export DATABASE_URL="mongodb+srv://..."            # optional, for persistent settings
+export USER_SESSION_STRING="your_cbgram_session"   # optional; needed for >2 GiB & fast dumps
+export DATABASE_URL="mongodb+srv://..."            # optional; persistent settings
+
+# Performance (recommended)
+export CBGRAM_RUST_CORE=1
+export CBGRAM_UVLOOP=1
+export CBGRAM_MAX_CONCURRENT=1024
+export CBGRAM_WORKERS=256
 
 chmod +x deploy.vps one-click-deploy.sh deploy.sh
 ./deploy.vps
 ```
-
-Each directory deploys as an isolated Docker Compose project (`COMPOSE_PROJECT_NAME` = folder name) with persistent host mounts (`.sessions`, `downloads`, `thumbnails`, `tokens`, `rclone`, `cookies`, `Images`, `configs`, `logs`) and automatic free-port selection starting at `8080`.
-
-### Useful Container Commands
 
 ```bash
 sudo docker compose -p lmb ps
@@ -43,15 +46,101 @@ sudo docker compose -p lmb logs -f lmb
 sudo docker compose -p lmb restart lmb
 ```
 
-## ⚙️ Key Environment Variables
+---
+
+## ⚙️ Important environment variables
 
 | Variable | Default | Description |
-| :--- | :--- | :--- |
-| `CBGRAM_RUST_CORE` | `1` | Enable compiled Rust `cbcrypto` transfer & crypto engine |
-| `CBGRAM_UVLOOP` | `1` | Enable `uvloop` event loop on Linux/macOS |
-| `CBGRAM_MAX_CONCURRENT` | `512` | Max concurrent MTProto transmissions per client |
-| `CBGRAM_WORKERS` | `128` | Client worker pool size |
-| `BOT_THREAD_POOL_SIZE` | `256` | `ThreadPoolExecutor` workers for media/sync tasks |
-| `USE_PREMIUM_EMOJIS` | `True` | Automatically render synced BotFather/custom `<tg-emoji>` |
-| `PREMIUM_EMOJI_PACK` | `""` | Optional custom emoji pack short name(s) or `t.me/addemoji/...` |
-| `CMD_SUFFIX` | `""` | Command suffix (e.g. `1` → `/leech1`, `/tmv1`, `/gensession1`) |
+|----------|---------|-------------|
+| `CBGRAM_RUST_CORE` | `1` | Rust `cbcrypto` engine for AES + file transfer |
+| `CBGRAM_UVLOOP` | `1` | uvloop event loop (Linux / macOS) |
+| `CBGRAM_MAX_CONCURRENT` | `1024` | Concurrent MTProto transmissions per client |
+| `CBGRAM_WORKERS` | `256` | Client worker pool size |
+| `CMD_SUFFIX` | `""` | Suffix for all commands (`1` → `/leech1`, `/tmv1`, `/tstatus1`) |
+| `USER_SESSION_STRING` | — | User session for premium-size uploads & primary hop |
+| `HELPER_TOKENS` / `HELPER_STRINGS` | — | Extra bot/user clients for parallel Hyper transfers |
+| `LEECH_LOG_CHAT` | — | Primary archive chat for fast user-session uploads |
+
+Install stack:
+
+```bash
+pip install -U "cbgram[fast]" cbcrypto
+# Do not mix with pyrogram / kurigram / pyrofork
+```
+
+See also: `SCALE-10K-NOTES.md`, `UPLOAD-SPEED-NOTES.md`.
+
+---
+
+## 🎬 1TamilMV Auto-Leech (`/tmv`)
+
+Open **`/tmv`** in DM with the bot.
+
+### Home controls
+- Start / Stop / Pause / Resume monitor  
+- Auto-detect or set domains  
+- Check now · Dump rules · Settings  
+
+### Settings mode
+- **User Settings** — uses your normal `/uset` profile  
+- **Independent** — isolated TMV profile (upload dest, prefix/suffix/caption, filters, interval)
+
+### Size limits (Independent mode)
+| Button | Meaning |
+|--------|---------|
+| **📏 DL Limit** | Max size for normal (non-archive) monitor releases. Default **4 GiB**. `-1` / `unlimited` = no limit |
+| **📦 ZIP Limit** | Max size when title looks like zip/rar/7z/tar. Default **unlimited** |
+
+Oversized releases are **skipped** (logged) and never queued.
+
+Set values like: `4GB`, `2GiB`, `500MB`, or `-1`.
+
+### Status separation
+- TMV auto-leech tasks **do not** appear in `/status`  
+- Use **`/tstatus`** or **`/ts`** for TMV-only task list  
+
+---
+
+## 👤 User settings (`/uset` · `/us`)
+
+Main menu sections:
+
+- General · Mirror · Leech · ENC/COM/Watermark · Video Tools  
+- Uphoster · FF Media · Misc  
+- Export / Import / Reset  
+
+TMV Independent mode opens the same structure under an isolated scope so it never overwrites your personal `/uset` values.
+
+---
+
+## 📋 Common commands
+
+| Command | Purpose |
+|---------|---------|
+| `/leech` `/l` | Leech link / file to Telegram |
+| `/mirror` `/m` | Mirror to Drive / Rclone |
+| `/status` `/s` | Active non-TMV tasks |
+| `/tstatus` `/ts` | TMV auto-leech tasks only |
+| `/tmv` | 1TamilMV monitor control panel |
+| `/uset` `/us` | Personal settings |
+| `/cancel` `/c` | Cancel a task |
+| `/gensession` | Generate cbgram session string (admin) |
+
+All of the above respect `CMD_SUFFIX`.
+
+---
+
+## 🛠 Recent fixes in this tree
+
+- **RecursionError** in `_get_ud` (user settings) — fixed  
+- **TMV Independent UI** — DL Limit + ZIP Limit buttons + enforcement  
+- **Status split** — `/tstatus` / `/ts` for 1TamilMV tasks  
+- **FloodWait guard** — shared backoff across clients  
+- **Fair helper selection** — least-loaded helpers for even user speeds  
+- **cbgram defaults** — higher concurrent transmissions & workers  
+
+---
+
+## 📄 License
+
+See `LICENSE` in this repository.
