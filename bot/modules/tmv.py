@@ -777,6 +777,13 @@ async def start_tmv_topic_picker(listener):
         if tok == "-tmv" or tok == topic_url:
             continue
         preserved.append(tok)
+    if getattr(listener, "extract", False) and "-e" not in preserved:
+        if isinstance(listener.extract, str):
+            preserved.extend(["-e", listener.extract])
+        else:
+            preserved.append("-e")
+    if getattr(listener, "compress", False) and "-z" not in preserved:
+        preserved.append("-z")
     extra_flags = preserved
 
     _TOPIC_PICKERS[token] = {
