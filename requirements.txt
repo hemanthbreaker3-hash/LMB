@@ -1,5 +1,5 @@
 aiofiles
-aiohttp>=3.14.5
+aiohttp
 aioshutil
 anytree
 apscheduler
@@ -10,7 +10,7 @@ cloudscraper
 dnspython
 fastapi
 feedparser
-google-api-python-client>=2.202.0
+google-api-python-client
 google-auth
 google-auth-oauthlib
 gunicorn
@@ -26,7 +26,7 @@ psutil
 pycountry
 motor>=3.3.0
 pymongo
-cbgram[fast]>=3.1.7
+cbgram[fast]>=0.3.1
 cbcrypto
 python-magic
 pytz
@@ -38,7 +38,7 @@ tenacity>=8.2.0
 uvicorn
 uvloop
 xattr
-yt-dlp[default,curl-cffi]>=2026.11.23
+yt-dlp[default,curl-cffi]
 yt-dlp-ejs
 pycryptodome
 

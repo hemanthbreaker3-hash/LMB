@@ -183,7 +183,7 @@ for key in sorted(cfg_keys | extra_keys):
 
 values.setdefault('CBGRAM_RUST_CORE', '1')
 values.setdefault('CBGRAM_UVLOOP', '1')
-values.setdefault('CBGRAM_MAX_CONCURRENT', '256')
+values.setdefault('CBGRAM_MAX_CONCURRENT', '512')
 values.setdefault('CBGRAM_WORKERS', '128')
 values['CBGRAM_SESSION_DIR'] = '/usr/src/app/.sessions'
 

@@ -54,7 +54,7 @@ class EngineStatus:
         self.STATUS_AIOHTTP = f"AioHttp v{get_v('aiohttp', '3.14.5')}"
         self.STATUS_GDAPI = f"Google-API v{get_v('gapi', '2.202.0')}"
         self.STATUS_QBIT = f"qBit v{get_v('qBittorrent', '5.3.1')}"
-        self.STATUS_TGRAM = f"cbgram v{get_v('cbgram', '3.1.7')}"
+        self.STATUS_TGRAM = f"cbgram v{get_v('cbgram', '0.3.1')}"
         self.STATUS_MEGA = f"MegaSDK v{get_v('mega', '10.20.20')}"
         self.STATUS_YTDLP = f"yt-dlp v{get_v('yt-dlp', '2026.11.23')}"
         self.STATUS_FFMPEG = f"ffmpeg v{get_v('ffmpeg', '9.1')}"

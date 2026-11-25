@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 RUN test -x /wzvenv/bin/python || (echo "ERROR: base image does not provide /wzvenv/bin/python" >&2; exit 1)
 
 COPY requirements.txt .
-RUN apt-get update -qq && apt-get install -y \
+RUN apt-get update -qq && apt-get install -y --reinstall \
     build-essential gcc libc6-dev pkg-config \
     libmagic1 libmagic-dev libffi-dev libssl-dev \
     aria2 ffmpeg p7zip-full par2 rclone qbittorrent-nox sabnzbdplus \

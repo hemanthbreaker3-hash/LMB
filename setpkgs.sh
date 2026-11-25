@@ -10,7 +10,7 @@ for _cand in /usr/bin/aria2c /usr/local/bin/aria2c "$(command -v "$1" 2>/dev/nul
 done
 if [ -z "$ARIA2C" ] && [ "$(id -u)" -eq 0 ] && command -v apt-get >/dev/null 2>&1; then
     echo "setpkgs: aria2c missing or not executable; installing aria2..." >&2
-    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends aria2 >&2 || true
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall --no-install-recommends aria2 >&2 || true
     [ -x /usr/bin/aria2c ] && ARIA2C=/usr/bin/aria2c
 fi
 if [ -z "$ARIA2C" ]; then

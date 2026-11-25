@@ -212,7 +212,7 @@ async def get_stats(event, key="home"):
 • <b>FFmpeg:</b> v{get_v("ffmpeg", "9.1")}
 • <b>7-Zip:</b> v{get_v("7z", "26.06")}
 • <b>Aiohttp:</b> v{get_v("aiohttp", "3.14.5")}
-• <b>CBGram:</b> v{get_v("cbgram", "3.1.7")}
+• <b>CBGram:</b> v{get_v("cbgram", "0.3.1")}
 • <b>Google API:</b> v{get_v("gapi", "2.202.0")}
 • <b>MegaSDK:</b> v{get_v("mega", "10.20.20")}</blockquote>
 """
