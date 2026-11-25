@@ -15,12 +15,13 @@ RUN apt-get update -qq && apt-get install -y \
     cpulimit mediainfo curl procps lsof iproute2 git wget && \
     (apt-cache show p7zip-rar >/dev/null 2>&1 && apt-get install -y p7zip-rar || true) && \
     rm -rf /var/lib/apt/lists/* && \
-    for bin in aria2c ffmpeg 7z rclone qbittorrent-nox; do \
+    rm -f /usr/local/bin/aria2c && \
+    for bin in ffmpeg 7z rclone qbittorrent-nox; do \
       if [ -e "/usr/local/bin/$bin" ] && ! "/usr/local/bin/$bin" --version >/dev/null 2>&1 && [ -x "/usr/bin/$bin" ]; then \
         rm -f "/usr/local/bin/$bin"; \
       fi; \
     done && \
-    aria2c --version >/dev/null && ffmpeg -version >/dev/null && 7z --help >/dev/null && rclone --version >/dev/null && \
+    aria2c --version >/dev/null && ffmpeg -version >/dev/null && 7z --help >/dev/null && rclone --version >/dev/null && qbittorrent-nox --version >/dev/null && \
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip uninstall --python /wzvenv/bin/python -y pyrogram kurigram pyrofork wzgram wzxpyro || true && \
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip install --python /wzvenv/bin/python --no-cache-dir -U -r requirements.txt && \
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip install --python /wzvenv/bin/python --no-cache-dir -U "cbgram[fast]" cbcrypto

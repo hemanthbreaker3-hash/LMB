@@ -1,13 +1,23 @@
 #!/bin/bash
 export PATH="/usr/bin:/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/sbin:${PATH:-}"
 
-ARIA2C=$1
+ARIA2C=""
 for _cand in /usr/bin/aria2c /usr/local/bin/aria2c "$(command -v "$1" 2>/dev/null || true)"; do
     if [ -n "$_cand" ] && [ -x "$_cand" ] && "$_cand" --version >/dev/null 2>&1; then
         ARIA2C="$_cand"
         break
     fi
 done
+if [ -z "$ARIA2C" ] && [ "$(id -u)" -eq 0 ] && command -v apt-get >/dev/null 2>&1; then
+    echo "setpkgs: aria2c missing or not executable; installing aria2..." >&2
+    apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq aria2 >&2 || true
+    [ -x /usr/bin/aria2c ] && ARIA2C=/usr/bin/aria2c
+fi
+if [ -z "$ARIA2C" ]; then
+    echo "setpkgs: ERROR: no working aria2c found (PATH=$PATH)" >&2
+    ls -la /usr/bin/aria2* /usr/local/bin/aria2* >&2 2>/dev/null || true
+    exit 1
+fi
 SERVICE_CORES=${2:-}
 CPU_LIMIT=${3:-20}
 SABNZBDPLUS=${4:-}

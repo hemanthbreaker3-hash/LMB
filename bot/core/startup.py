@@ -409,9 +409,12 @@ async def load_configurations():
 
     from .cpu import service_cores
 
-    cmd = f'chmod 600 .netrc && cp .netrc /root/.netrc && chmod +x setpkgs.sh && ./setpkgs.sh {BinConfig.ARIA2_NAME} "{service_cores()}" {Config.CPU_LIMIT}'
+    import shutil
+    aria2_bin = shutil.which(BinConfig.ARIA2_NAME) or ("/usr/bin/aria2c" if await aiopath.exists("/usr/bin/aria2c") else BinConfig.ARIA2_NAME)
+    sab_bin = shutil.which(BinConfig.SABNZBD_NAME) or ("/usr/bin/sabnzbdplus" if await aiopath.exists("/usr/bin/sabnzbdplus") else BinConfig.SABNZBD_NAME)
+    cmd = f'chmod 600 .netrc && cp .netrc /root/.netrc && chmod +x setpkgs.sh && ./setpkgs.sh {aria2_bin} "{service_cores()}" {Config.CPU_LIMIT}'
     if not Config.DISABLE_NZB:
-        cmd += f" {BinConfig.SABNZBD_NAME}"
+        cmd += f" {sab_bin}"
     await (await create_subprocess_shell(cmd)).wait()
 
     if await aiopath.exists("cfg.zip"):
