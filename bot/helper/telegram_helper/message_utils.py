@@ -205,6 +205,12 @@ async def edit_message(message, text, buttons=None, block=True, photo=None):
     except ReplyMarkupInvalid as rmi:
         LOGGER.warning(str(rmi))
         return await edit_message(message, text, None, block, photo)
+    except Exception as e:
+        if "REPLY_MARKUP_TOO_LONG" in str(e):
+            LOGGER.warning("ReplyMarkupTooLong in edit_message; retrying without markup")
+            return await edit_message(message, text, None, block, photo)
+        LOGGER.error(str(e), exc_info=True)
+        return str(e)
     except FloodWait as f:
         LOGGER.warning(str(f))
         if not block:

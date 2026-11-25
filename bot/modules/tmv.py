@@ -644,31 +644,86 @@ async def start_tmv_monitors():
 
 # ---------- -tmv Interactive Topic Quality Picker ----------
 
+_PICKER_PER_PAGE = 8
+
+
+def _picker_filtered_indices(releases: list[dict], tab: str) -> list[int]:
+    if tab == "magnet":
+        return [i for i, r in enumerate(releases) if r.get("magnet")]
+    if tab == "torrent":
+        return [i for i, r in enumerate(releases) if r.get("torrent_link")]
+    if tab == "direct":
+        return [i for i, r in enumerate(releases) if r.get("direct_link")]
+    return list(range(len(releases)))
+
+
 def _render_picker_ui(token: str):
     state = _TOPIC_PICKERS[token]
     topic = state["topic"]
-    selected = state["selected"]
+    selected = state["selected"]  # set of (idx, kind)
     releases = topic["releases"]
+    tab = state.get("tab", "all")
 
+    mag_cnt = sum(1 for r in releases if r.get("magnet"))
+    tor_cnt = sum(1 for r in releases if r.get("torrent_link"))
+    cyb_cnt = sum(1 for r in releases if r.get("direct_link"))
+
+    indices = _picker_filtered_indices(releases, tab)
+    total = len(indices)
+    total_pages = max(1, (total + _PICKER_PER_PAGE - 1) // _PICKER_PER_PAGE)
+    page = max(0, min(state.get("page", 0), total_pages - 1))
+    state["page"] = page
+    start = page * _PICKER_PER_PAGE
+    end = min(total, start + _PICKER_PER_PAGE)
+
+    tab_names = {"all": "All", "magnet": "Magnet", "torrent": "Torrent", "direct": "Cyberloom"}
     lines = [
         f"<b>🎬 {escape(topic['title'])}</b>",
-        f"<blockquote>Select qualities/releases to download (qBittorrent for magnet/torrent, fallback to direct):</blockquote>",
+        f"<blockquote>Tab: <b>{tab_names.get(tab, 'All')}</b> ({start + 1 if total else 0}–{end} of {total} • Page {page + 1}/{total_pages}) | Selected: <b>{len(selected)}</b></blockquote>",
     ]
     btns = ButtonMaker()
-    for idx, rel in enumerate(releases):
-        mark = "✅" if idx in selected else "⬜"
-        src_tag = "🧲" if rel.get("magnet") else ("📄" if rel.get("torrent_link") else "🔗")
-        label = f"{mark} {src_tag} {rel['title'][:36]} ({rel.get('size', '?')})"
-        btns.data_button(label, f"tmvp {token} tog {idx}")
+
+    # Source-type filter tabs (only show types available on this page)
+    if (mag_cnt > 0) + (tor_cnt > 0) + (cyb_cnt > 0) > 1:
+        btns.data_button(f"{'• ' if tab == 'all' else ''}📋 All ({len(releases)})", f"tmvp {token} tab all", "header")
+    if mag_cnt:
+        btns.data_button(f"{'• ' if tab == 'magnet' else ''}🧲 Magnet ({mag_cnt})", f"tmvp {token} tab magnet", "header")
+    if tor_cnt:
+        btns.data_button(f"{'• ' if tab == 'torrent' else ''}📄 Torrent ({tor_cnt})", f"tmvp {token} tab torrent", "header")
+    if cyb_cnt:
+        btns.data_button(f"{'• ' if tab == 'direct' else ''}🔗 Cyberloom ({cyb_cnt})", f"tmvp {token} tab direct", "header")
+
+    sel_kind = tab if tab in ("magnet", "torrent", "direct") else "all"
+    for idx in indices[start:end]:
+        rel = releases[idx]
+        mark = "✅" if (idx, sel_kind) in selected else "⬜"
+        if sel_kind == "magnet":
+            src_tag = "🧲"
+        elif sel_kind == "torrent":
+            src_tag = "📄"
+        elif sel_kind == "direct":
+            src_tag = "🔗"
+        else:
+            src_tag = "🧲" if rel.get("magnet") else ("📄" if rel.get("torrent_link") else "🔗")
+        label = f"{mark} {src_tag} {rel['title'][:32]} ({rel.get('size', '?')})"
+        btns.data_button(label, f"tmvp {token} tog {idx} {sel_kind}")
+
+    if total_pages > 1:
+        if page > 0:
+            btns.data_button("⬅️ Prev", f"tmvp {token} page {page - 1}", "l_body")
+        btns.data_button(f"📄 {page + 1}/{total_pages}", f"tmvp {token} noop", "l_body")
+        if page < total_pages - 1:
+            btns.data_button("➡️ Next", f"tmvp {token} page {page + 1}", "l_body")
+
     btns.data_button("☑️ Select All", f"tmvp {token} all", "footer")
     btns.data_button("🧹 Clear", f"tmvp {token} none", "footer")
     btns.data_button(f"✅ Done ({len(selected)})", f"tmvp {token} done", "footer", style=ButtonStyle.SUCCESS)
     btns.data_button("❌ Cancel", f"tmvp {token} cancel", "footer", style=ButtonStyle.DANGER)
-    return "\n".join(lines), btns.build_menu(1)
+    return "\n".join(lines), btns.build_menu(1, h_cols=2, f_cols=2)
 
 
 async def start_tmv_topic_picker(listener):
-    """Handle `<tamilmv_topic_url> -tmv`: scrape topic and let user select qualities before downloading."""
+    """Handle `<tamilmv_topic_url> -tmv`: scrape topic and let user select Magnet/Torrent/Cyberloom qualities."""
     topic_url = listener.link
     if not topic_url or "http" not in topic_url:
         await send_message(listener.message, "⚠️ Please provide a valid 1TamilMV topic URL with <code>-tmv</code>.")
@@ -683,7 +738,7 @@ async def start_tmv_topic_picker(listener):
         return
 
     if not topic or not topic.get("releases"):
-        await edit_message(wait_msg, "⚠️ No downloadable releases (magnet/torrent/direct) found on this page.")
+        await edit_message(wait_msg, "⚠️ No downloadable releases (magnet/torrent/cyberloom) found on this page.")
         return
 
     token = token_hex(4)
@@ -706,6 +761,8 @@ async def start_tmv_topic_picker(listener):
         "topic": topic,
         "active_base": active_base,
         "selected": set(),
+        "tab": "all",
+        "page": 0,
         "mode_override": {
             "is_leech": bool(getattr(listener, "is_leech", False)),
             "is_uphoster": bool(getattr(listener, "is_uphoster", False)),
@@ -739,20 +796,42 @@ async def tmv_picker_callback(_, query):
         await delete_message(query.message, query.message.reply_to_message)
         return
 
-    if action == "tog" and len(parts) > 3:
-        idx = int(parts[3])
-        if idx in state["selected"]:
-            state["selected"].remove(idx)
+    if action == "noop":
+        await query.answer()
+        return
+
+    if action == "tab" and len(parts) > 3:
+        state["tab"] = parts[3]
+        state["page"] = 0
+        await query.answer()
+        text_msg, markup = _render_picker_ui(token)
+        await edit_message(query.message, text_msg, markup)
+        return
+
+    if action == "page" and len(parts) > 3:
+        state["page"] = int(parts[3])
+        await query.answer()
+        text_msg, markup = _render_picker_ui(token)
+        await edit_message(query.message, text_msg, markup)
+        return
+
+    if action == "tog" and len(parts) > 4:
+        key = (int(parts[3]), parts[4])
+        if key in state["selected"]:
+            state["selected"].remove(key)
         else:
-            state["selected"].add(idx)
+            state["selected"].add(key)
         await query.answer()
         text_msg, markup = _render_picker_ui(token)
         await edit_message(query.message, text_msg, markup)
         return
 
     if action == "all":
-        state["selected"] = set(range(len(releases)))
-        await query.answer("All selected")
+        tab = state.get("tab", "all")
+        sel_kind = tab if tab in ("magnet", "torrent", "direct") else "all"
+        for idx in _picker_filtered_indices(releases, tab):
+            state["selected"].add((idx, sel_kind))
+        await query.answer(f"Selected all in {tab} ({len(state['selected'])} total)")
         text_msg, markup = _render_picker_ui(token)
         await edit_message(query.message, text_msg, markup)
         return
@@ -766,16 +845,28 @@ async def tmv_picker_callback(_, query):
 
     if action == "done":
         if not state["selected"]:
-            await query.answer("Select at least one quality first!", show_alert=True)
+            await query.answer("Select at least one item first!", show_alert=True)
             return
         _TOPIC_PICKERS.pop(token, None)
-        chosen = [releases[i] for i in sorted(state["selected"]) if 0 <= i < len(releases)]
+        chosen = sorted(state["selected"])
         await query.answer(f"Starting {len(chosen)} download(s)...")
         await edit_message(
             query.message,
-            f"✅ <b>Queued {len(chosen)} release(s)</b> from <b>{escape(state['topic']['title'])}</b> — starting download &amp; upload...",
+            f"✅ <b>Queued {len(chosen)} item(s)</b> from <b>{escape(state['topic']['title'])}</b> — starting download &amp; upload...",
         )
-        for rel in chosen:
+        for idx, kind in chosen:
+            if not (0 <= idx < len(releases)):
+                continue
+            rel = dict(releases[idx])
+            if kind == "magnet":
+                rel["torrent_link"] = None
+                rel["direct_link"] = None
+            elif kind == "torrent":
+                rel["magnet"] = None
+                rel["direct_link"] = None
+            elif kind == "direct":
+                rel["magnet"] = None
+                rel["torrent_link"] = None
             await _dispatch_release_to_lmb(
                 state["uid"],
                 rel,
