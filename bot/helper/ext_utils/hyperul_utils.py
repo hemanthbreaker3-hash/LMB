@@ -79,12 +79,15 @@ class HypertgUpload(HypertgTransfer):
         if not getattr(self._obj, "_speed_clock_started", False) and current > 0:
             self._obj._start_time = _wall_now()
             self._obj._speed_clock_started = True
+        now = monotonic()
+        if current == 0:
+            self._upload_begin_ts = now
+            return
         if not self._file_progress and current > 0:
-            self._meter = {"t": monotonic(), "b": 0, "speed": 0.0}
-        self._upload_begin_ts = 0.0
+            base_t = getattr(self, "_upload_begin_ts", 0.0) or now
+            self._meter = {"t": base_t, "b": 0, "speed": 0.0}
 
         # Immediate speed tracking from the first tick — no slow-start ramp
-        now = monotonic()
         delta_t = now - self._meter["t"]
         delta_b = current - self._meter["b"]
         if delta_b > 0 and (delta_t >= 0.05 or not self._meter["speed"]):

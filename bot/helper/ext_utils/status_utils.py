@@ -238,10 +238,13 @@ def progress_bar(percent: float, task_key=None) -> str:
             from ...core.config_manager import Config as config_cls
         except Exception:
             config_cls = None
-    # User-selected universal style: Dotted. Keep the same 12-cell width
-    # for task cards, helper aliases, upload/download and media operations.
+    # Arrow flow progress bar: ━━━━➤──────── (12-cell width)
     filled = min(BAR_LENGTH, int(value * BAR_LENGTH / 100))
-    return "●" * filled + "○" * (BAR_LENGTH - filled)
+    if filled <= 0:
+        return "➤" + "─" * (BAR_LENGTH - 1)
+    if filled >= BAR_LENGTH:
+        return "━" * (BAR_LENGTH - 1) + "➤"
+    return "━" * filled + "➤" + "─" * (BAR_LENGTH - filled - 1)
 
 
 def format_progress(

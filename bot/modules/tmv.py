@@ -784,6 +784,10 @@ async def start_tmv_topic_picker(listener):
             preserved.append("-e")
     if getattr(listener, "compress", False) and "-z" not in preserved:
         preserved.append("-z")
+    if getattr(listener, "seed", False) and "-d" not in preserved:
+        preserved.append("-d")
+    if getattr(listener, "join", False) and "-j" not in preserved:
+        preserved.append("-j")
     extra_flags = preserved
 
     _TOPIC_PICKERS[token] = {

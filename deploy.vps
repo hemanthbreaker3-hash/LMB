@@ -371,7 +371,7 @@ namespace = {"escape": escape}
 module = ast.Module(body=[*assignments, *nodes], type_ignores=[])
 ast.fix_missing_locations(module)
 exec(compile(module, str(source_path), "exec"), namespace)
-expected = "●●●●●●●○○○○○"
+expected = "━━━━━━━➤────"
 if namespace["progress_bar"]("60%") != expected or len(namespace["progress_bar"]("60%")) != 12:
     raise SystemExit("Deployment error: 12-cell progress renderer smoke test failed")
 print(f"Progress UI preflight: OK ({expected})")
