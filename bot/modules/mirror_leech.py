@@ -402,6 +402,26 @@ class Mirror(TaskListener):
             if len(dargs) == 2:
                 seed_time = dargs[1] or None
             self.seed = True
+        elif not self.seed and not Config.DISABLE_SEED:
+            cfg_ratio = self.user_dict.get("SEED_RATIO") or getattr(Config, "SEED_RATIO", 0) or 0
+            cfg_time = self.user_dict.get("SEED_TIME") or getattr(Config, "SEED_TIME", 0) or 0
+            auto_seed = self.user_dict.get("AUTO_SEED") if "AUTO_SEED" in self.user_dict else getattr(Config, "AUTO_SEED", False)
+            try:
+                from .. import qbit_options
+                qb_ratio = float(qbit_options.get("max_ratio", -1) or -1)
+                qb_time = int(qbit_options.get("max_seeding_time", -1) or -1)
+            except Exception:
+                qb_ratio, qb_time = -1, -1
+            if auto_seed or float(cfg_ratio) > 0 or int(cfg_time) > 0 or qb_ratio > 0 or qb_time > 0:
+                self.seed = True
+                if float(cfg_ratio) > 0:
+                    ratio = str(cfg_ratio)
+                elif qb_ratio > 0:
+                    ratio = str(qb_ratio)
+                if int(cfg_time) > 0:
+                    seed_time = str(cfg_time)
+                elif qb_time > 0:
+                    seed_time = str(qb_time)
 
         if not isinstance(is_bulk, bool):
             dargs = is_bulk.split(":")

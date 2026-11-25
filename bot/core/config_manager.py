@@ -152,6 +152,10 @@ class Config:
     LEECH_SPLIT_SIZE = BOT_MAX_BYTES
     MEDIA_GROUP = False
     USE_HYPER = True
+    AUTO_EXTRACT = True
+    AUTO_SEED = False
+    SEED_RATIO = 0.0
+    SEED_TIME = 0
     USE_PREMIUM_EMOJIS = True
     PREMIUM_EMOJI_PACK = ""
     PREMIUM_EMOJIS = {}

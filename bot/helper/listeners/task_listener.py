@@ -573,6 +573,26 @@ class TaskListener(TaskConfig):
                 merge_enabled,
             )
 
+        if (
+            not self.extract
+            and not self.compress
+            and not self.is_nzb
+            and getattr(self, "tmv_auto_extract", False)
+        ):
+            try:
+                if await aiopath.isfile(str(up_path)) and is_archive(str(up_path)):
+                    self.extract = True
+                elif await aiopath.isdir(str(up_path)):
+                    def _has_archive(folder):
+                        for _, _, fnames in walk(folder):
+                            if any(is_archive(fn) for fn in fnames):
+                                return True
+                        return False
+                    if await sync_to_async(_has_archive, str(up_path)):
+                        self.extract = True
+            except Exception:
+                pass
+
         if (self.extract and not self.is_nzb) or deferred_audio_split is not None:
             LOGGER.info(
                 "Archive EXTRACT after combine (multi_folder=%s, path=%s)",

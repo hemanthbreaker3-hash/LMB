@@ -505,8 +505,6 @@ async def _dispatch_release_to_lmb(
     if mode_override is not None:
         if mode_override.get("extra_flags"):
             flags.append(mode_override["extra_flags"])
-        if poster_url and "-t " not in (mode_override.get("extra_flags") or ""):
-            flags.append(f"-t {poster_url}")
     elif cfg.get("settings_mode") == "independent":
         ind = cfg.get("independent", {})
         flags.append("-doc" if ind.get("AS_DOCUMENT") else "-med")
@@ -514,15 +512,9 @@ async def _dispatch_release_to_lmb(
             flags.append(f"-up {up_dest_flag}")
         elif is_leech and ind.get("LEECH_DUMP_CHAT"):
             flags.append(f"-up {ind['LEECH_DUMP_CHAT']}")
-        if poster_url and ind.get("AUTO_THUMBNAIL", True):
-            flags.append(f"-t {poster_url}")
     else:
         if up_dest_flag:
             flags.append(f"-up {up_dest_flag}")
-        if poster_url:
-            ud = user_data.get(uid, {})
-            if ud.get("AUTO_THUMBNAIL", getattr(Config, "AUTO_THUMBNAIL", True)):
-                flags.append(f"-t {poster_url}")
 
     flag_str = " ".join(flags).strip()
     if torrent_file_path and ospath.isfile(torrent_file_path):
@@ -548,8 +540,10 @@ async def _dispatch_release_to_lmb(
         with suppress(Exception):
             synth.from_user = await TgClient.bot.get_users(uid)
 
-    if mode_override is None and cfg.get("settings_mode") == "independent":
-        setattr(synth, "_tmv_overrides", dict(cfg.get("independent", {})))
+    if mode_override is None:
+        setattr(synth, "_tmv_auto_extract", True)
+        if cfg.get("settings_mode") == "independent":
+            setattr(synth, "_tmv_overrides", dict(cfg.get("independent", {})))
     if cfg.get("dumps"):
         setattr(synth, "_tmv_dump_rules", list(cfg.get("dumps", [])))
 
@@ -776,15 +770,14 @@ async def start_tmv_topic_picker(listener):
     p = urlparse(topic_url)
     active_base = f"{p.scheme}://{p.netloc}".rstrip("/")
 
-    extra_flags = []
-    if getattr(listener, "as_doc", False):
-        extra_flags.append("-doc")
-    elif getattr(listener, "as_med", False):
-        extra_flags.append("-med")
-    if getattr(listener, "thumb", None):
-        extra_flags.append(f"-t {listener.thumb}")
-    if getattr(listener, "up_dest", None):
-        extra_flags.append(f"-up {listener.up_dest}")
+    raw_text = (getattr(listener.message, "text", None) or getattr(listener.message, "caption", None) or "").strip()
+    raw_tokens = raw_text.split()[1:] if raw_text else []
+    preserved = []
+    for tok in raw_tokens:
+        if tok == "-tmv" or tok == topic_url:
+            continue
+        preserved.append(tok)
+    extra_flags = preserved
 
     _TOPIC_PICKERS[token] = {
         "uid": listener.user_id,
