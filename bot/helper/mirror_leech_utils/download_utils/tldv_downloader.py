@@ -6,7 +6,6 @@ import aiofiles
 from aiofiles.os import makedirs, remove as aioremove
 from aioshutil import rmtree
 from secrets import token_urlsafe
-from httpx import AsyncClient
 
 from .... import LOGGER, task_dict, task_dict_lock
 from ....core.config_manager import Config
@@ -143,6 +142,7 @@ class TldvDownloader:
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
 
+        from httpx import AsyncClient
         async with AsyncClient(verify=False, follow_redirects=True) as client:
             # 1. Fetch metadata
             meta_url = f"https://gw.tldv.io/v1/meetings/{self.meeting_id}/watch-page?noTranscript=true"

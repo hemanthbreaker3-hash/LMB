@@ -1,7 +1,6 @@
 import asyncio
 from os import path as ospath
 from typing import Any, Awaitable, Callable
-from httpx import AsyncClient, HTTPError
 
 from bot import LOGGER
 from bot.core.config_manager import Config
@@ -59,6 +58,7 @@ async def _api(
     data: Any = None,
     files: Any = None,
 ) -> Any:
+    from httpx import AsyncClient, HTTPError
     try:
         async with AsyncClient(timeout=_TIMEOUT, headers=_headers()) as client:
             res = await client.request(
