@@ -86,6 +86,44 @@ async def cancel(_, message):
 
 
 @new_task
+async def cancel_updates(_, query):
+    data = query.data.split()
+    user_id = query.from_user.id
+    if len(data) < 3:
+        await query.answer()
+        if len(data) > 1 and data[1] == "close":
+            await delete_message(query.message)
+        return
+    gid = data[2]
+    from bot import active_range_tasks
+    range_task = next(
+        (rt for rid, rt in active_range_tasks.items() if rid == gid or rid.endswith(gid)),
+        None,
+    )
+    if range_task is not None:
+        if (
+            Config.OWNER_ID != user_id
+            and range_task.get("user_id") != user_id
+            and not await CustomFilters.sudo("", query)
+        ):
+            await query.answer("This task is not for you!", show_alert=True)
+            return
+        await _cancel_single_range_task(range_task)
+        await query.answer("Batch task cancelled!", show_alert=True)
+        return
+    task = await get_task_by_gid(gid)
+    if task is None:
+        await query.answer("Task already cancelled or finished!", show_alert=True)
+        return
+    if user_id != task.listener.user_id and not await CustomFilters.sudo("", query):
+        await query.answer("This task is not for you!", show_alert=True)
+        return
+    await query.answer("Cancelling task...")
+    obj = task.task()
+    await obj.cancel_task()
+
+
+@new_task
 async def cancel_multi(_, query):
     data = query.data.split()
     if len(data) < 3:
@@ -196,18 +234,11 @@ async def cancel_all_update(_, query):
         button = create_cancel_buttons(is_sudo, query.from_user.id)
         await edit_message(message, "<b>🛑 Bulk Task Cancel Menu</b>\n\n<blockquote>Select task category to cancel.</blockquote>", button)
     elif data[1] == "ms":
-        buttons = button_build.ButtonMaker()
-        buttons.data_button(
-            "Yes, Cancel All", f"canall {data[2]} confirm {user_id}", style=ButtonStyle.SUCCESS
-        )
-        buttons.data_button("◀️ Back", f"canall back confirm {user_id}")
-        buttons.data_button(
-            "❌ Close", f"canall close confirm {user_id}", style=ButtonStyle.DANGER
-        )
-        button = buttons.build_menu(2)
-        await edit_message(
-            message, f"<b>⚠️ Confirm Cancellation</b>\n\n<blockquote>Are you sure you want to cancel all <b>{data[2]}</b> tasks?</blockquote>", button
-        )
+        button = create_cancel_buttons(is_sudo, user_id)
+        await edit_message(message, "<b>🛑 Cancelling selected tasks... Please wait.</b>", button)
+        res = await cancel_all(data[2], user_id)
+        if not res:
+            await send_message(reply_to, f"<b>No matching active tasks found for {data[2]}!</b>")
     else:
         button = create_cancel_buttons(is_sudo, user_id)
         await edit_message(message, "<b>🛑 Cancelling selected tasks... Please wait.</b>", button)

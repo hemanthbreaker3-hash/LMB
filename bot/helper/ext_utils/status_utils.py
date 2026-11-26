@@ -422,6 +422,14 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
 
     msg += f"\n<b>━━━━━━━━━━━━━━━━━━</b>\n<b>📊 LMB Status</b> · 📦 <b>Active:</b> <i>{tasks_no}</i>"
     buttons = ButtonMaker()
+    page_tasks = tasks[start_position : STATUS_LIMIT + start_position]
+    for idx, tk in enumerate(page_tasks, start=1):
+        try:
+            tgid = tk.gid()[:8]
+            lbl = "🛑 Cancel" if len(page_tasks) == 1 else f"🛑 Cancel #{idx}"
+            buttons.data_button(lbl, f"cancel direct {tgid}", position="header", style=ButtonStyle.DANGER)
+        except Exception:
+            pass
     if not is_user:
         buttons.data_button(
             "📜 TStats",

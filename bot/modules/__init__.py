@@ -1,6 +1,6 @@
 from .bot_settings import send_bot_settings, edit_bot_settings
 from .memory import memory_stats, memory_callback
-from .cancel_task import cancel, cancel_multi, cancel_all_buttons, cancel_all_update, cancel_range_link, cancel_range_link_cb
+from .cancel_task import cancel, cancel_updates, cancel_multi, cancel_all_buttons, cancel_all_update, cancel_range_link, cancel_range_link_cb
 from .chat_permission import (
     authorize,
     unauthorize,
@@ -92,6 +92,7 @@ __all__ = [
     "send_bot_settings",
     "edit_bot_settings",
     "cancel",
+    "cancel_updates",
     "cancel_multi",
     "cancel_all_buttons",
     "cancel_all_update",

@@ -196,6 +196,9 @@ async def add_handlers():
         CallbackQueryHandler(cancel_multi, filters=regex("^stopm"))
     )
     TgClient.bot.add_handler(
+        CallbackQueryHandler(cancel_updates, filters=regex(r"^cancel(?:\s|$)"))
+    )
+    TgClient.bot.add_handler(
         MessageHandler(
             clone_node,
             filters=command(BotCommands.CloneCommand, case_sensitive=False)
@@ -250,7 +253,6 @@ async def add_handlers():
     TgClient.bot.add_handler(
         MessageHandler(
             delete_file,
-    delete_leech,
             filters=command(BotCommands.DeleteCommand, case_sensitive=False)
             & CustomFilters.authorized,
         )
