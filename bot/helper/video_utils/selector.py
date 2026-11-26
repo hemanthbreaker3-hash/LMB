@@ -18,12 +18,12 @@ for _k, _v in {'DISABLE_VIDTOOLS': [], 'HARDSUB_FONT_NAME': '', 'HARDSUB_FONT_SI
     config_dict.setdefault(_k, _v)
 PRIVILEGED_ONLY_VT_MODES = {'compress', 'convert', 'watermark', 'subsync', 'video_audio_sync', 'remove_ads_names'}
 REMOVED_VT_MODES = {
-    'vid_vid_audio', 'vid_sub', 'audio_swap', 'audio_track',
+    'audio_swap', 'audio_track',
     'audio_channel', 'subtitle_swap', 'subtitle_rename',
     'rmstream', 'audio_rename', 'vid_vid_audio_swap', 'vid_vid_rmstream',
     'vid_vid_audio_sync',
 }
-REMOVED_SUBTITLE_OVERLAY_CALLBACKS = {'hardsub', 'subfile', 'fontstyle'}
+REMOVED_SUBTITLE_OVERLAY_CALLBACKS = set()
 VT_CONTROL_CALLBACKS = {
     # Keep this set in sync with every active callback emitted by list_buttons().
     'multivt', 'start', 'done', 'merge_mode', 'back', 'cancel', 'binary_size',
@@ -34,6 +34,8 @@ VT_CONTROL_CALLBACKS = {
 
 VID_MODE = {
     'vid_vid': 'Video + Video',
+    'vid_vid_audio': 'Video + Audio',
+    'vid_sub': 'Video + Subtitle',
     'subsync': 'SubSync',
     'compress': 'Compress',
     'convert': 'Convert',
@@ -267,6 +269,17 @@ class SelectMode():
                 buttons.data_button(done_label, 'vidtool done', 'footer')
             if self.multi_vt and self.multi_modes:
                 buttons.data_button(f'🚀 Start Chain ({len(self.multi_modes)})', 'vidtool start', 'footer')
+            if self.mode in ('vid_sub', 'watermark'):
+                hardsub = self.extra_data.get('hardsub')
+                buttons.data_button(f"{'✅ ' if hardsub else ''}Hardsub", 'vidtool hardsub', 'header')
+                if hardsub:
+                    if self.mode == 'watermark':
+                        buttons.data_button(
+                            f"{'✅ ' if await aiopath.exists(self.extra_data.get('subfile', '')) else ''}Sub File",
+                            'vidtool subfile',
+                            'header',
+                        )
+                    buttons.data_button('Font Style', 'vidtool fontstyle', 'header')
             if self.mode in ('compress', 'watermark') or self.extra_data.get('hardsub'):
                 buttons.data_button('Quality', 'vidtool quality', 'header')
             if self.mode == 'watermark':

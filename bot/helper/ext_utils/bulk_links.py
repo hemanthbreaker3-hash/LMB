@@ -24,8 +24,8 @@ async def get_links_from_file(message):
 
 
 async def extract_bulk_links(message, bulk_start, bulk_end):
-    bulk_start = int(bulk_start)
-    bulk_end = int(bulk_end)
+    bulk_start = int(bulk_start or 0)
+    bulk_end = int(bulk_end or 0)
     links_list = []
     if reply_to := message.reply_to_message:
         if (file_ := reply_to.document) and (file_.mime_type == "text/plain"):

@@ -1110,7 +1110,7 @@ class TaskConfig:
 
     @new_task
     async def run_multi(self, input_list, obj):
-        await sleep(3)
+        await sleep(getattr(Config, "MULTI_TIMEGAP", 3) or 0)
         if not self.multi_tag and self.multi > 1:
             self.multi_tag = token_hex(3)
             multi_tags.add(self.multi_tag)
@@ -1148,30 +1148,32 @@ class TaskConfig:
             # advance to reply_id + 1 without waiting 3 minutes for manual input.
             reply_id = self.message.reply_to_message_id
             if reply_id is not None and not getattr(self.message, "_is_interactive_multi", False):
-                try:
-                    cand = await self.client.get_messages(
-                        chat_id=self.message.chat.id,
-                        message_ids=reply_id + 1,
-                    )
-                    if (
-                        isinstance(cand, Message)
-                        and not getattr(cand, "empty", False)
-                        and (
-                            cand.document
-                            or cand.video
-                            or cand.audio
-                            or cand.photo
-                            or (cand.text or cand.caption or "").strip()
+                for _offset in range(1, 4):
+                    try:
+                        cand = await self.client.get_messages(
+                            chat_id=self.message.chat.id,
+                            message_ids=reply_id + _offset,
                         )
-                    ):
-                        cmd0 = input_list[0] if input_list else "/leech"
-                        opt = self.options if isinstance(self.options, str) else " ".join(self.options or [])
-                        msgts = f"{cmd0} -i {remaining} {opt}".strip()
-                        if remaining > 1:
-                            msgts += f"\n• <b>Cancel Multi:</b> <i>/{BotCommands.CancelTaskCommand[1]}_{self.multi_tag}</i>"
-                        nextmsg = await send_message(cand, msgts)
-                except Exception:
-                    nextmsg = None
+                        if (
+                            isinstance(cand, Message)
+                            and not getattr(cand, "empty", False)
+                            and (
+                                cand.document
+                                or cand.video
+                                or cand.audio
+                                or cand.photo
+                                or (cand.text or cand.caption or "").strip()
+                            )
+                        ):
+                            cmd0 = input_list[0] if input_list else "/leech"
+                            opt = self.options if isinstance(self.options, str) else " ".join(self.options or [])
+                            msgts = f"{cmd0} -i {remaining} {opt}".strip()
+                            if remaining > 1:
+                                msgts += f"\n• <b>Cancel Multi:</b> <i>/{BotCommands.CancelTaskCommand[1]}_{self.multi_tag}</i>"
+                            nextmsg = await send_message(cand, msgts)
+                            break
+                    except Exception:
+                        continue
 
         if nextmsg is None and len(self.bulk) == 0:
             # Wait for the user's next message (link or archive/media file)
