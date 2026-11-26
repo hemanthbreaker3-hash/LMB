@@ -148,3 +148,12 @@ def is_media(message: Message):
 def get_url_name(url: str):
     """Return a decoded filename-like component from a URL or path."""
     return unquote_plus(unquote(urlparse(str(url)).path.rpartition("/")[-1]))
+
+
+def is_tldv_link(url: str):
+    return bool(
+        re_match(
+            r"https?://(?:app\.)?tldv\.io/(?:app/meetings|watch)/[a-zA-Z0-9]+",
+            str(url or ""),
+        )
+    )

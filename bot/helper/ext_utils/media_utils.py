@@ -1043,7 +1043,7 @@ class FFMpeg:
                 await remove(output_file)
             return False
 
-    async def split(self, f_path, file_, parts, split_size):
+    async def split(self, f_path, file_, parts, split_size, split_ext_suffix=False):
         cores, threads = ffmpeg_layout()
         self.clear()
         multi_streams = True
@@ -1056,7 +1056,7 @@ class FFMpeg:
         digits = max(2, len(str(parts)))
         while i <= parts or start_time < duration - 4:
             suffix = f"part{i:0{digits}d}" if split_mode == "part" else f"{i:0{digits}d}"
-            out_name = f"{base_name}.{suffix}{extension}"
+            out_name = f"{file_}.{i:03}" if split_ext_suffix else f"{base_name}.{suffix}{extension}"
             out_path = ospath.join(ospath.dirname(f_path), out_name)
             cmd = [
                 "taskset",

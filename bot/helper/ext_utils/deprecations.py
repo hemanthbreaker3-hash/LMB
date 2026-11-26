@@ -4,7 +4,13 @@ LOGGER = getLogger("bot")
 
 
 class Deprecations:
-    OWNER_MAP = {"LEECH_DUMP_CHAT": "LEECH_LOG_CHAT"}
+    OWNER_MAP = {
+        "LEECH_DUMP_CHAT": "LEECH_LOG_CHAT",
+        "LEECH_FILENAME_PREFIX": "LEECH_PREFIX",
+        "NAME_SUBSTITUTE": "NAME_SWAP",
+        "INCOMPLETE_TASK_NOTIFIER": "INC_TASK_NOTIFY",
+        "GOFILE_API_KEY": "GOFILE_API",
+    }
     USER_MAP = {
         "LEECH_DUMP_CHAT": "Leech Dump Chats in Leech Settings",
         "ldump": "Leech Dump Chats in Leech Settings",

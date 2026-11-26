@@ -26,8 +26,19 @@ class TelegramStatus:
 
     def status(self):
         if self._status == "up":
+            if getattr(self._obj, "_upload_waiting", False):
+                return MirrorStatus.STATUS_QUEUEUP
             return MirrorStatus.STATUS_UPLOAD
         return MirrorStatus.STATUS_DOWNLOAD
+
+    def current_file(self):
+        idx = getattr(self._obj, "_current_file_index", 0)
+        total = getattr(self._obj, "_total_files", 0)
+        name = getattr(self._obj, "_current_file_name", "")
+        if name and idx:
+            total_str = f"/{total}" if total else ""
+            return f"[{idx}{total_str}] {name}"
+        return ""
 
     def name(self):
         return self.listener.name
@@ -53,9 +64,12 @@ class TelegramStatus:
 
     def eta(self):
         try:
-            seconds = (self._size - self._obj.processed_bytes) / self._obj.speed
+            spd = float(getattr(self._obj, "speed", 0) or 0)
+            if spd <= 0:
+                return "-"
+            seconds = max(0, (self._size - self._obj.processed_bytes) / spd)
             return get_readable_time(seconds)
-        except ZeroDivisionError:
+        except Exception:
             return "-"
 
     def gid(self):

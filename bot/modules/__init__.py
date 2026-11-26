@@ -16,6 +16,7 @@ from .file_selector import select, confirm_selection
 from .force_start import remove_from_queue
 from .gd_count import count_node
 from .gd_delete import delete_file
+from .leech_del import delete_leech
 from .gd_clean import drive_clean, confirm_drive_clean_cb
 from .gd_search import gdrive_search, select_type
 from .help import arg_usage, bot_help
@@ -67,6 +68,8 @@ from .users_settings import (
     send_user_settings,
 )
 from .ytdlp import ytdl, ytdl_leech
+from .gallery_dl import gallery_dl, gallery_dl_leech
+from .nzb_search import hydra_search
 # VT legacy command aliases now use the exact WZML-X yt-dlp handlers.
 socialdl = ytdl
 socialdl_leech = ytdl_leech
@@ -110,6 +113,7 @@ __all__ = [
     "remove_from_queue",
     "count_node",
     "delete_file",
+    "delete_leech",
     "drive_clean",
     "confirm_drive_clean_cb",
     "gdrive_search",
@@ -131,6 +135,9 @@ __all__ = [
     "seedr_link",
     "ytdl",
     "ytdl_leech",
+    "gallery_dl",
+    "gallery_dl_leech",
+    "hydra_search",
     "socialdl",
     "socialdl_leech",
     "cookiesettings",

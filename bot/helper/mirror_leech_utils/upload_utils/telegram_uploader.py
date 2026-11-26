@@ -30,7 +30,7 @@ from pyrogram.types import (
 
 from ....core.config_manager import Config
 from ....core.tg_client import BOT_MAX_BYTES, TgClient
-from ...ext_utils.bot_utils import sync_to_async
+from ...ext_utils.bot_utils import parse_dest, sync_to_async
 from ...ext_utils.files_utils import get_base_name, is_archive
 from ...ext_utils.status_utils import get_readable_file_size, get_readable_time
 
@@ -41,6 +41,7 @@ from ...ext_utils.hyperul_utils import HypertgUpload
 from ...ext_utils.media_utils import format_tg_thumbnail
 
 LOGGER = getLogger(__name__)
+_TELEGRAM_UPLOAD_LOCK = Lock()
 
 
 class TelegramUploader:
@@ -76,6 +77,9 @@ class TelegramUploader:
         # of a merged file still get a full caption instead of empty languages.
         self._media_info_cache = {}
         self._media_lock = Lock()
+        self._current_file_index = 0
+        self._current_file_name = ""
+        self._upload_waiting = False
 
     async def _user_settings(self):
         settings_map = {
@@ -163,13 +167,14 @@ class TelegramUploader:
             fd = leech_dests[0]
             first_dump = fd[0] if isinstance(fd, (tuple, list)) else fd
 
-        leech_chat = (
-            getattr(self._listener, "up_dest", None)
-            or Config.LEECH_LOG_CHAT
-            or first_dump
+        parsed_bot_dump, parsed_bot_dump_thread = (
+            parse_dest(Config.LEECH_LOG_CHAT) if Config.LEECH_LOG_CHAT else (None, None)
         )
-        if leech_chat and not getattr(self._listener, "up_dest", None):
-            self._listener.up_dest = leech_chat
+        if parsed_bot_dump and parsed_bot_dump != self._listener.user_id:
+            self._listener.up_dest = parsed_bot_dump
+            self._listener.chat_thread_id = parsed_bot_dump_thread
+        elif not getattr(self._listener, "up_dest", None) and first_dump:
+            self._listener.up_dest = first_dump
             if leech_dests and isinstance(leech_dests[0], (tuple, list)) and len(leech_dests[0]) > 1:
                 self._listener.chat_thread_id = leech_dests[0][1]
 
@@ -376,8 +381,16 @@ class TelegramUploader:
             "u": "u",
         }
         selected_tag = font_tags.get(str(lfont or "none").strip().lower())
-        if cap_mono and selected_tag:
-            cap_mono = f"<{selected_tag}>{cap_mono}</{selected_tag}>"
+        if cap_mono:
+            if selected_tag:
+                open_tag = f"<{selected_tag}>"
+                close_tag = f"</{selected_tag}>"
+                max_inner = 1024 - len(open_tag) - len(close_tag)
+                if len(cap_mono) > max_inner:
+                    cap_mono = cap_mono[: max(0, max_inner - 3)] + "..."
+                cap_mono = f"{open_tag}{cap_mono}{close_tag}"
+            elif len(cap_mono) > 1024:
+                cap_mono = cap_mono[:1021] + "..."
 
         if len(file_) > 60:
             if is_archive(file_):
@@ -403,6 +416,14 @@ class TelegramUploader:
         old_path = ospath.join(dirpath, pre_file_)
         new_path = ospath.join(dirpath, file_)
         if old_path != new_path:
+            if await aiopath.exists(new_path):
+                stem, ext = ospath.splitext(file_)
+                counter = 1
+                while await aiopath.exists(new_path):
+                    suffix_tag = f"_{counter}"
+                    new_name = f"{stem[: max(1, 64 - len(ext) - len(suffix_tag))]}{suffix_tag}{ext}"
+                    new_path = ospath.join(dirpath, new_name)
+                    counter += 1
             await rename(old_path, new_path)
 
         return new_path, cap_mono
@@ -506,15 +527,17 @@ class TelegramUploader:
                 self._msgs_dict[m.link] = m.caption
         for i, (old_cid, old_mid) in enumerate(old_ids):
             old_key = (old_cid, old_mid)
-            if old_key in self._msg_to_seq:
+            if old_key in self._msg_to_seq and i < len(msgs_list):
                 seq_idx = self._msg_to_seq.pop(old_key)
                 new_msg = msgs_list[i]
+                prev_entry = self._upload_seq[seq_idx] or {}
                 self._upload_seq[seq_idx] = {
                     "chat_id": new_msg.chat.id,
                     "msg_id": new_msg.id,
                     "link": new_msg.link,
-                    "file_": self._upload_seq[seq_idx]["file_"],
-                    "user_session": self._upload_seq[seq_idx].get("user_session", False),
+                    "file_": prev_entry.get("file_", ""),
+                    "caption": prev_entry.get("caption", ""),
+                    "user_session": prev_entry.get("user_session", False),
                 }
                 self._msg_to_seq[(new_msg.chat.id, new_msg.id)] = seq_idx
         self._sent_msg = msgs_list[-1]
@@ -695,17 +718,16 @@ class TelegramUploader:
                     if not self._listener.is_cancelled:
                         LOGGER.error(f"Failed to copy upload to dump {dest}: {err}")
 
-            dump_coros = []
             for dest, thread_id in extras:
+                if self._listener.is_cancelled:
+                    return
                 if not dest or dest == self._listener.user_id:
                     continue
                 target = (dest, thread_id)
                 if target in done:
                     continue
                 done.add(target)
-                dump_coros.append(_copy_to_dump(dest, thread_id))
-            if dump_coros:
-                await gather(*dump_coros, return_exceptions=True)
+                await _copy_to_dump(dest, thread_id)
 
             # Keep every Telegram upload in its configured Leech Dump Chat.
             # Dump messages are permanent archive copies: never delete the
@@ -723,10 +745,17 @@ class TelegramUploader:
                 if self._listener.is_super_chat or self._listener.up_dest:
                     if not self._is_private:
                         entry = self._upload_seq[seq_idx]
-                        if entry["msg_id"] == sent.id:
+                        if entry and entry["msg_id"] == sent.id:
                             self._msgs_dict[sent.link] = file_
+            elif not self._listener.is_cancelled and not self._is_corrupted:
+                self._corrupted += 1
+                self._error = self._error or f"Upload returned empty message for {file_}"
             return sent
         except StopTransmission:
+            if not self._listener.is_cancelled:
+                LOGGER.error(f"Unexpected StopTransmission for {f_path}")
+                self._error = f"Transmission interrupted for {file_}"
+                self._corrupted += 1
             return None
         except Exception as err:
             LOGGER.error(f"{err}. Path: {f_path}", exc_info=True)
@@ -788,26 +817,39 @@ class TelegramUploader:
                     await gather(*cache_coros[:8], return_exceptions=True)
         except Exception as e:
             LOGGER.debug(f"Media-info pre-cache skipped: {e}")
-        upload_tasks = []
-        seq_idx = 0
-        client_pool_size = (
-            len(TgClient.helper_bots)
-            + len(TgClient.helper_users)
-            + (1 if TgClient.user else 0)
-            + 1
-        )
-        max_parallel = max(16, min(64, client_pool_size * 8))
-        up_sem = Semaphore(max_parallel)
-        anchor_msg = self._sent_msg
-        for dirpath, _, files in natsorted(await sync_to_async(walk, self._path)):
-            if dirpath.strip().endswith("/yt-dlp-thumb"):
-                continue
-            if dirpath.strip().endswith("_mltbss"):
-                await self._send_screenshots(dirpath, files)
-                await rmtree(dirpath, ignore_errors=True)
-                continue
-            for file_ in natsorted(files):
+        self._upload_waiting = True
+        async with _TELEGRAM_UPLOAD_LOCK:
+            self._upload_waiting = False
+            if self._listener.is_cancelled:
+                return
+            self._start_time = time()
+            self._speed_clock_started = False
+            ordered_files = []
+            if await aiopath.isfile(self._path):
+                ordered_files.append((ospath.dirname(self._path), ospath.basename(self._path)))
+            else:
+                walked = await sync_to_async(walk, self._path)
+                for dirpath, _, files in natsorted(
+                    walked, key=lambda item: ospath.relpath(item[0], self._path)
+                ):
+                    if dirpath.strip().endswith("/yt-dlp-thumb"):
+                        continue
+                    if dirpath.strip().endswith("_mltbss"):
+                        await self._send_screenshots(dirpath, natsorted(files))
+                        await rmtree(dirpath, ignore_errors=True)
+                        continue
+                    for file_ in natsorted(files):
+                        ordered_files.append((dirpath, file_))
+
+            seq_idx = 0
+            anchor_msg = self._sent_msg
+            total_candidates = len(ordered_files)
+            for pos, (dirpath, file_) in enumerate(ordered_files, start=1):
+                if self._listener.is_cancelled:
+                    return
                 self._error = ""
+                self._current_file_index = pos
+                self._current_file_name = file_
                 f_path = ospath.join(dirpath, file_)
                 if not await aiopath.exists(f_path):
                     LOGGER.error(f"{f_path} not exists! Continue uploading!")
@@ -828,7 +870,7 @@ class TelegramUploader:
                             x for v in self._media_dict.values() for x in v.keys()
                         ]
                         match = re_match(r".+(?=\.0*\d+$)|.+(?=\.part\d+\..+$)", f_path)
-                        if not match or match and match.group(0) not in group_lists:
+                        if not match or (match and match.group(0) not in group_lists):
                             for key, value in list(self._media_dict.items()):
                                 for subkey, msgs in list(value.items()):
                                     if len(msgs) > 1:
@@ -849,21 +891,12 @@ class TelegramUploader:
                     self._user_session = part_user_session
                     self._last_msg_in_group = False
                     self._upload_seq.append(None)
-                    async def _run_bounded(
-                        _file=file_,
-                        _fpath=f_path,
-                        _dir=dirpath,
-                        _usess=part_user_session,
-                        _idx=seq_idx,
-                    ):
-                        async with up_sem:
-                            if self._listener.is_cancelled:
-                                return None
-                            return await self._upload_file_task(
-                                _file, _fpath, _dir, _usess, _idx, reply_anchor=anchor_msg
-                            )
-
-                    upload_tasks.append(_run_bounded())
+                    LOGGER.info(
+                        f"Sequential Telegram Upload [{pos}/{total_candidates}]: {file_}"
+                    )
+                    await self._upload_file_task(
+                        file_, f_path, dirpath, part_user_session, seq_idx, reply_anchor=anchor_msg
+                    )
                     seq_idx += 1
                     if self._listener.is_cancelled:
                         return
@@ -873,28 +906,25 @@ class TelegramUploader:
                     self._corrupted += 1
                     if self._listener.is_cancelled:
                         return
-        if upload_tasks:
-            results = await gather(*upload_tasks, return_exceptions=True)
-            for r in results:
-                if isinstance(r, Exception):
-                    LOGGER.error(f"Upload task error: {r}")
-        for key, value in list(self._media_dict.items()):
-            for subkey, msgs in list(value.items()):
-                if len(msgs) > 1:
-                    try:
-                        await self._send_media_group(subkey, key, msgs)
-                    except Exception as e:
-                        LOGGER.info(
-                            f"While sending media group at the end of task. Error: {e}"
-                        )
-        if self._upload_seq:
-            src_chat = self._listener.message.chat
-            await self._sequence_copies(src_chat)
-            self._msgs_dict = {
-                e["link"]: e["file_"]
-                for e in self._upload_seq
-                if e is not None and e.get("link")
-            }
+
+            for key, value in list(self._media_dict.items()):
+                for subkey, msgs in list(value.items()):
+                    if len(msgs) > 1:
+                        try:
+                            await self._send_media_group(subkey, key, msgs)
+                        except Exception as e:
+                            LOGGER.info(
+                                f"While sending media group at the end of task. Error: {e}"
+                            )
+
+            if self._upload_seq:
+                src_chat = self._listener.message.chat
+                await self._sequence_copies(src_chat)
+                self._msgs_dict = {
+                    e["link"]: e["file_"]
+                    for e in self._upload_seq
+                    if e is not None and e.get("link")
+                }
         if self._listener.is_cancelled:
             return
         if self._total_files == 0:

@@ -28,6 +28,7 @@ class GoFileUpload(BaseUpload):
     SERVICE_NAME = "GoFile"
     _TOKEN_KEY = "GOFILE_TOKEN"
     _CONFIG_KEY = "GOFILE_API"
+    _ALT_CONFIG_KEY = "GOFILE_API_KEY"
 
     def __init__(self, listener, path, folder_name=""):
         super().__init__(listener, path, folder_name)

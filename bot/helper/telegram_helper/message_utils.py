@@ -146,10 +146,6 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
     except PeerIdInvalid:
         LOGGER.warning(f"PeerIdInvalid when sending message to {message}")
         return None
-    except EntityBoundsInvalid:
-        cleaned = strip_premium_emojis(caption)
-        if cleaned != caption:
-            return await send_file(message, file, cleaned, buttons)
     except ConnectionError:
         return
     except Exception as e:
@@ -205,12 +201,6 @@ async def edit_message(message, text, buttons=None, block=True, photo=None):
     except ReplyMarkupInvalid as rmi:
         LOGGER.warning(str(rmi))
         return await edit_message(message, text, None, block, photo)
-    except Exception as e:
-        if "REPLY_MARKUP_TOO_LONG" in str(e):
-            LOGGER.warning("ReplyMarkupTooLong in edit_message; retrying without markup")
-            return await edit_message(message, text, None, block, photo)
-        LOGGER.error(str(e), exc_info=True)
-        return str(e)
     except FloodWait as f:
         LOGGER.warning(str(f))
         if not block:
@@ -220,6 +210,9 @@ async def edit_message(message, text, buttons=None, block=True, photo=None):
     except OSError:
         return
     except Exception as e:
+        if "REPLY_MARKUP_TOO_LONG" in str(e):
+            LOGGER.warning("ReplyMarkupTooLong in edit_message; retrying without markup")
+            return await edit_message(message, text, None, block, photo)
         LOGGER.error(str(e), exc_info=True)
         return str(e)
 

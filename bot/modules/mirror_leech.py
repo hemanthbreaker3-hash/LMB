@@ -26,6 +26,7 @@ from ..helper.ext_utils.status_utils import (
 )
 from ..helper.ext_utils.exceptions import DirectDownloadLinkException
 from ..helper.ext_utils.links_utils import (
+    is_tldv_link,
     is_gdrive_id,
     is_gdrive_link,
     is_mega_link,
@@ -37,6 +38,12 @@ from ..helper.ext_utils.links_utils import (
 )
 from ..helper.ext_utils.task_manager import pre_task_check
 from ..helper.listeners.task_listener import TaskListener
+from ..helper.mirror_leech_utils.download_utils.tldv_downloader import add_tldv_download
+from ..helper.mirror_leech_utils.download_utils.torbox_resolver import (
+    torbox_resolve,
+    torbox_resolve_magnet,
+    torbox_resolve_torrent,
+)
 from ..helper.mirror_leech_utils.download_utils.alldebrid_resolver import (
     alldebrid_resolve,
     alldebrid_resolve_magnet,
@@ -168,6 +175,8 @@ class Mirror(TaskListener):
             "-bt": False,
             "-ut": False,
             "-ad": False,
+            "-tb": False,
+            "-ses": False,
             "-yt": False,
             "-vt": False,
             "-tmv": False,
@@ -291,6 +300,8 @@ class Mirror(TaskListener):
         self.bot_trans = args["-bt"]
         self.user_trans = args["-ut"]
         self.is_alldebrid = args["-ad"]
+        self.is_torbox = args["-tb"]
+        self.split_ext_suffix = args["-ses"]
         self.is_seedr = args["-seedr"] or self.is_seedr
         self.is_yt = args["-yt"]
         self.hls_requested = hls_requested
@@ -828,7 +839,7 @@ class Mirror(TaskListener):
                 self.thumb = await create_thumb(reply_to, self.user_id)
 
         if (is_youtube_link(self.link) or self.is_yt) and not (
-            self.is_seedr or self.is_jd or self.is_nzb or self.is_alldebrid
+            self.is_seedr or self.is_jd or self.is_nzb or self.is_alldebrid or self.is_torbox
         ):
             from .ytdlp import YtDlp
             bot_loop.create_task(
@@ -848,6 +859,45 @@ class Mirror(TaskListener):
             return
 
         self._set_mode_engine()
+
+        if self.is_torbox and (
+            is_magnet(self.link) or self.link.endswith(".torrent")
+        ):
+            try:
+                if is_magnet(self.link):
+                    LOGGER.info("TorBox magnet route")
+                    resolved = await torbox_resolve_magnet(
+                        self.link,
+                        is_cancelled=lambda: self.is_cancelled,
+                    )
+                else:
+                    LOGGER.info(f"TorBox torrent file route: {self.link}")
+                    async with aiopen(self.link, "rb") as fh:
+                        torrent_bytes = await fh.read()
+                    resolved = await torbox_resolve_torrent(
+                        torrent_bytes,
+                        ospath.basename(self.link),
+                        is_cancelled=lambda: self.is_cancelled,
+                    )
+            except DirectDownloadLinkException as e:
+                e = str(e)
+                LOGGER.info(e)
+                if e.startswith("ERROR:"):
+                    await send_message(self.message, e)
+                    await self.remove_from_same_dir()
+                    await delete_links(self.message)
+                    return
+                resolved = None
+            except Exception as e:
+                await send_message(self.message, e)
+                await self.remove_from_same_dir()
+                await delete_links(self.message)
+                return
+            if isinstance(resolved, dict):
+                self._torbox_torrent_id = resolved.get("torbox_torrent_id", 0)
+                self.link = resolved
+                self.is_jd = False
+                self.is_qbit = False
 
         if self.is_alldebrid and (
             is_magnet(self.link) or self.link.endswith(".torrent")
@@ -902,6 +952,29 @@ class Mirror(TaskListener):
             and not is_gdrive_id(self.link)
             and not is_mega_link(self.link)
         ):
+            if self.is_torbox:
+                try:
+                    resolved = await torbox_resolve(
+                        self.link,
+                        is_cancelled=lambda: self.is_cancelled,
+                    )
+                    if isinstance(resolved, dict):
+                        self._torbox_web_id = resolved.get("torbox_web_id", 0)
+                        self.link = resolved
+                except DirectDownloadLinkException as e:
+                    e = str(e)
+                    LOGGER.info(e)
+                    if e.startswith("ERROR:"):
+                        await send_message(self.message, e)
+                        await self.remove_from_same_dir()
+                        await delete_links(self.message)
+                        return
+                except Exception as e:
+                    await send_message(self.message, e)
+                    await self.remove_from_same_dir()
+                    await delete_links(self.message)
+                    return
+
             if self.is_alldebrid:
                 try:
                     self.link = await alldebrid_resolve(self.link)
@@ -970,6 +1043,8 @@ class Mirror(TaskListener):
             await add_gd_download(self, path)
         elif is_mega_link(self.link):
             await add_mega_download(self, f"{path}/")
+        elif is_tldv_link(self.link):
+            await add_tldv_download(self, path, headers)
         else:
             ussr = args["-au"]
             pssw = args["-ap"]

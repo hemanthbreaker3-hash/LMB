@@ -210,6 +210,13 @@ ffset_options = [
 ]
 advanced_options = [
     "EXCLUDED_EXTENSIONS",
+    "INCLUDED_EXTENSIONS",
+    "GALLERY_DL_OPTIONS",
+    "SPLIT_EXT_SUFFIX",
+    "FILES_LINKS",
+    "CLONE_DUMP_CHATS",
+    "BUZZHEAVIER_ACCOUNT_ID",
+    "BUZZHEAVIER_FOLDER_ID",
     "NAME_SWAP",
     "AUTO_RENAME_FORMAT",
     "YT_DLP_OPTIONS",
@@ -322,6 +329,31 @@ A dict works too: <code>{'Movies': -1001234567890}</code></i>
         "Dict",
         "Predefined dictionary of upload paths.",
         "<blockquote>Send dictionary of path shortcuts.\n⏱️ <b>Time Left:</b> <code>60 sec</code></blockquote>",
+    ),
+    "INCLUDED_EXTENSIONS": (
+        "Extensions",
+        "Space-separated file extensions to include.",
+        "<blockquote>Send included extensions separated by space (e.g. mkv mp4).\n⏱️ <b>Time Left:</b> <code>60 sec</code></blockquote>",
+    ),
+    "GALLERY_DL_OPTIONS": (
+        "Dict",
+        "Custom gallery-dl JSON options.",
+        "<blockquote>Send gallery-dl JSON options dict.\n⏱️ <b>Time Left:</b> <code>60 sec</code></blockquote>",
+    ),
+    "CLONE_DUMP_CHATS": (
+        "Dict",
+        "Named clone dump chats dictionary.",
+        "<blockquote>Send dict of clone dump chats.\n⏱️ <b>Time Left:</b> <code>60 sec</code></blockquote>",
+    ),
+    "BUZZHEAVIER_ACCOUNT_ID": (
+        "ID",
+        "BuzzHeavier Account ID.",
+        "<blockquote>Send your BuzzHeavier Account ID.\n⏱️ <b>Time Left:</b> <code>60 sec</code></blockquote>",
+    ),
+    "BUZZHEAVIER_FOLDER_ID": (
+        "ID",
+        "BuzzHeavier Folder ID.",
+        "<blockquote>Send your BuzzHeavier Folder ID.\n⏱️ <b>Time Left:</b> <code>60 sec</code></blockquote>",
     ),
     "EXCLUDED_EXTENSIONS": (
         "Extensions",
@@ -1930,6 +1962,37 @@ The bot does not guess undocumented endpoints.</blockquote>
         buttons.data_button(
             "Excluded Extensions", f"{_cb_prefix()} {user_id} menu EXCLUDED_EXTENSIONS"
         )
+        buttons.data_button(
+            "Included Extensions", f"{_cb_prefix()} {user_id} menu INCLUDED_EXTENSIONS"
+        )
+        buttons.data_button(
+            "Gallery-DL Options", f"{_cb_prefix()} {user_id} menu GALLERY_DL_OPTIONS"
+        )
+        buttons.data_button(
+            "Clone Dump Chats", f"{_cb_prefix()} {user_id} menu CLONE_DUMP_CHATS"
+        )
+        buttons.data_button(
+            "Buzzheavier Account ID", f"{_cb_prefix()} {user_id} menu BUZZHEAVIER_ACCOUNT_ID"
+        )
+        buttons.data_button(
+            "Buzzheavier Folder ID", f"{_cb_prefix()} {user_id} menu BUZZHEAVIER_FOLDER_ID"
+        )
+        split_ext_sfx = bool(
+            user_dict.get("SPLIT_EXT_SUFFIX")
+            or (Config.SPLIT_EXT_SUFFIX and "SPLIT_EXT_SUFFIX" not in user_dict)
+        )
+        buttons.data_button(
+            f"{'Disable' if split_ext_sfx else 'Enable'} Split Ext Suffix",
+            f"{_cb_prefix()} {user_id} tog SPLIT_EXT_SUFFIX {'f' if split_ext_sfx else 't'}",
+        )
+        files_links_on = bool(
+            user_dict.get("FILES_LINKS")
+            or (Config.FILES_LINKS and "FILES_LINKS" not in user_dict)
+        )
+        buttons.data_button(
+            f"{'Disable' if files_links_on else 'Enable'} Files Links",
+            f"{_cb_prefix()} {user_id} tog FILES_LINKS {'f' if files_links_on else 't'}",
+        )
         if user_dict.get("EXCLUDED_EXTENSIONS", False):
             ex_ex = user_dict["EXCLUDED_EXTENSIONS"]
         elif "EXCLUDED_EXTENSIONS" not in user_dict:
@@ -2008,6 +2071,8 @@ The bot does not guess undocumented endpoints.</blockquote>
 • <b>Auto Rename:</b> <b>{'Enabled' if auto_rename else 'Disabled'}</b>
 • <b>Rename Format:</b> <code>{escape(str(rename_fmt))}</code>
 • <b>Excluded Extensions:</b> <code>{ex_ex}</code>
+• <b>Included Extensions:</b> <code>{escape(str(user_dict.get('INCLUDED_EXTENSIONS') or Config.INCLUDED_EXTENSIONS or 'None'))}</code>
+• <b>Split Ext Suffix:</b> <b>{'Enabled' if split_ext_sfx else 'Disabled'}</b> · <b>Files Links:</b> <b>{'Enabled' if files_links_on else 'Disabled'}</b>
 • <b>Upload Paths Dict:</b> <b>{upload_paths}</b>
 • <b>YT-DLP Custom Options:</b> <code>{ytopt}</code>
 • <b>Cookie File Status:</b> <b>{user_cookie_msg}</b>

@@ -217,13 +217,13 @@ class HypertgUpload(HypertgTransfer):
         up_size = ospath.getsize(file_path)
         hyper_user_only = False
 
-        if self._listener.up_dest:
-            # Explicit command destination always has highest priority.
+        if Config.LEECH_LOG_CHAT:
+            # Bot settings dump is always the primary staging destination;
+            # bot then copies sequentially to User PM and all user/additional dumps.
+            upload_chat_id, thread_id = parse_dest(Config.LEECH_LOG_CHAT)
+        elif self._listener.up_dest:
             upload_chat_id = self._listener.up_dest
             thread_id = self._listener.chat_thread_id
-        elif Config.LEECH_LOG_CHAT:
-            # The primary Leech Dump Chat is the first staging destination.
-            upload_chat_id, thread_id = parse_dest(Config.LEECH_LOG_CHAT)
         elif getattr(self._listener, "leech_dests", None):
             # If the primary field is empty, use the first configured dump
             # from Bot Settings / User Settings as the initial upload target.
@@ -351,13 +351,32 @@ class HypertgUpload(HypertgTransfer):
                 except Exception:
                     pass
 
+    @staticmethod
+    def _safe_caption(cap):
+        if not cap or len(cap) <= 1024:
+            return cap
+        return cap[:1020] + "..."
+
     async def _send_with_retry(self, send_func, **kwargs):
+        if kwargs.get("caption"):
+            kwargs["caption"] = self._safe_caption(kwargs["caption"])
+        transient_attempts = 0
         while True:
+            if self._listener.is_cancelled:
+                raise StopTransmission()
             try:
                 return await send_func(**kwargs)
             except (FloodWait, FloodPremiumWait) as f:
                 LOGGER.warning(f"HypertgUL flood {f.value}s on {self._up_file}")
                 await sleep(f.value + 1)
+            except (TimeoutError, ConnectionError, OSError) as net_err:
+                transient_attempts += 1
+                if transient_attempts >= 3 or self._listener.is_cancelled:
+                    raise
+                LOGGER.warning(
+                    f"HypertgUL transient error on {self._up_file} (attempt {transient_attempts}/3): {net_err}"
+                )
+                await sleep(2 * transient_attempts)
 
     async def _try_send(self, key, client, kwargs):
         try:
@@ -372,14 +391,48 @@ class HypertgUpload(HypertgTransfer):
         except PhotoInvalidDimensions:
             kwargs.pop("thumb", None)
             kwargs.pop("video_cover", None)
-            if key == "videos":
-                return await self._send_with_retry(client.send_video, **kwargs)
-            elif key == "audios":
-                return await self._send_with_retry(client.send_audio, **kwargs)
-            elif key == "photos":
-                return await self._send_with_retry(client.send_photo, **kwargs)
-            else:
-                return await self._send_with_retry(client.send_document, **kwargs)
+            try:
+                if key == "videos":
+                    return await self._send_with_retry(client.send_video, **kwargs)
+                elif key == "audios":
+                    return await self._send_with_retry(client.send_audio, **kwargs)
+                elif key == "photos":
+                    return await self._send_with_retry(client.send_photo, **kwargs)
+                else:
+                    return await self._send_with_retry(client.send_document, **kwargs)
+            except Exception:
+                if key in ("photos", "videos", "audios"):
+                    doc_kwargs = dict(kwargs)
+                    media_path = (
+                        doc_kwargs.pop("photo", None)
+                        or doc_kwargs.pop("video", None)
+                        or doc_kwargs.pop("audio", None)
+                    )
+                    for k in ("duration", "width", "height", "performer", "title", "video_cover"):
+                        doc_kwargs.pop(k, None)
+                    if media_path:
+                        doc_kwargs["document"] = media_path
+                        return await self._send_with_retry(client.send_document, **doc_kwargs)
+                raise
+        except Exception as err:
+            err_up = str(err).upper()
+            if key in ("photos", "videos", "audios") and any(
+                tok in err_up
+                for tok in ("IMAGE_PROCESS_FAILED", "PHOTO_EXT_INVALID", "VIDEO_CONTENT_TYPE_INVALID", "PHOTO_INVALID")
+            ):
+                LOGGER.warning(f"Media send failed ({err}) for {self._up_file}; falling back to send_document")
+                doc_kwargs = dict(kwargs)
+                media_path = (
+                    doc_kwargs.pop("photo", None)
+                    or doc_kwargs.pop("video", None)
+                    or doc_kwargs.pop("audio", None)
+                )
+                for k in ("duration", "width", "height", "performer", "title", "video_cover", "thumb"):
+                    doc_kwargs.pop(k, None)
+                if media_path:
+                    doc_kwargs["document"] = media_path
+                    return await self._send_with_retry(client.send_document, **doc_kwargs)
+            raise
 
     async def _upload_via_bot_bridge(
         self,

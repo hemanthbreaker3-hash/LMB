@@ -35,7 +35,9 @@ class BuzzHeavierUpload(BaseUpload):
         from bot import user_data
 
         user_dict = user_data.get(self.listener.user_id, {})
-        self.folder_id = user_dict.get("BUZZHEAVIER_FOLDER_ID") or ""
+        from bot.core.config_manager import Config
+        self.account_id = user_dict.get("BUZZHEAVIER_ACCOUNT_ID") or getattr(Config, "BUZZHEAVIER_ACCOUNT_ID", "") or ""
+        self.folder_id = user_dict.get("BUZZHEAVIER_FOLDER_ID") or getattr(Config, "BUZZHEAVIER_FOLDER_ID", "") or ""
 
     @staticmethod
     async def is_buzzapi(token):

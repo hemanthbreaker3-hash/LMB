@@ -250,8 +250,16 @@ async def add_handlers():
     TgClient.bot.add_handler(
         MessageHandler(
             delete_file,
+    delete_leech,
             filters=command(BotCommands.DeleteCommand, case_sensitive=False)
             & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            delete_leech,
+            filters=command(BotCommands.LeechDelCommand, case_sensitive=False)
+            & CustomFilters.sudo,
         )
     )
     TgClient.bot.add_handler(
@@ -311,6 +319,27 @@ async def add_handlers():
         MessageHandler(
             ytdl_leech,
             filters=command(BotCommands.YtdlLeechCommand, case_sensitive=False)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            gallery_dl,
+            filters=command(BotCommands.GallerydlCommand, case_sensitive=False)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            gallery_dl_leech,
+            filters=command(BotCommands.GallerydlLeechCommand, case_sensitive=False)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            hydra_search,
+            filters=command(BotCommands.NzbSearchCommand, case_sensitive=False)
             & CustomFilters.authorized,
         )
     )

@@ -22,6 +22,7 @@ from .. import (
     var_list,
     user_data,
     excluded_extensions,
+    included_extensions,
     nzb_options,
     qbit_options,
     rss_dict,
@@ -342,6 +343,12 @@ async def update_variables():
         for id_ in aid:
             sudo_users.append(int(id_.strip()))
 
+    if Config.INCLUDED_EXTENSIONS:
+        included_extensions.clear()
+        for x in str(Config.INCLUDED_EXTENSIONS).split():
+            x = x.strip().lower().lstrip(".")
+            if x:
+                included_extensions.append(f".{x}")
     if Config.EXCLUDED_EXTENSIONS:
         fx = Config.EXCLUDED_EXTENSIONS.split()
         for x in fx:

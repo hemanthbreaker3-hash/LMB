@@ -374,6 +374,8 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
             msg += f"\n┠ <b>Processed:</b> <i>{escape(str(task.processed_bytes()))}{escape(str(subsize))} of {escape(str(task.size()))}</i>"
             if count:
                 msg += f"\n┠ <b>Files:</b> <i>{escape(str(count))}</i>"
+            elif hasattr(task, "current_file") and (cur_f := task.current_file()):
+                msg += f"\n┠ <b>File:</b> <code>{escape(str(cur_f))}</code>"
             msg += f"\n┠ <b>Status:</b> <i>{escape(str(tstatus))}</i>"
             msg += f"\n┠ <b>Speed:</b> <i>{escape(str(task.speed()))}</i>"
             msg += f"\n┠ <b>ETA:</b> <i>{escape(str(task.eta()))}</i>"

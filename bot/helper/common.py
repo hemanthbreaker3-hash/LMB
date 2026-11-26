@@ -17,6 +17,7 @@ from .. import (
     LOGGER,
     categories_dict,
     excluded_extensions,
+    included_extensions,
     intervals,
     multi_tags,
     task_dict,
@@ -354,7 +355,13 @@ class TaskConfig:
         self.thumb = None
         # A URL supplied explicitly with -t takes precedence over every saved/automatic thumbnail mode.
         self.thumb_url_override = False
+        self._torbox_torrent_id = 0
+        self._torbox_web_id = 0
+        self.is_torbox = False
         self.excluded_extensions = []
+        self.included_extensions = []
+        self.split_ext_suffix = False
+        self.clone_dump_chats = {}
         self.files_to_proceed = []
         self.is_super_chat = self.message.chat.type in [
             ChatType.SUPERGROUP,
@@ -543,6 +550,20 @@ class TaskConfig:
         )
         if self.name_swap:
             self.name_swap = [x.split(":") for x in self.name_swap.split("|")]
+        ie_val = self.user_dict.get("INCLUDED_EXTENSIONS")
+        if ie_val:
+            self.included_extensions = [
+                f".{x.strip().lower().lstrip('.')}"
+                for x in (ie_val.split() if isinstance(ie_val, str) else ie_val)
+                if str(x).strip()
+            ]
+        elif "INCLUDED_EXTENSIONS" not in self.user_dict:
+            self.included_extensions = list(included_extensions)
+        self.split_ext_suffix = bool(
+            self.split_ext_suffix
+            or self.user_dict.get("SPLIT_EXT_SUFFIX")
+            or (Config.SPLIT_EXT_SUFFIX and "SPLIT_EXT_SUFFIX" not in self.user_dict)
+        )
         self.excluded_extensions = self.user_dict.get("EXCLUDED_EXTENSIONS") or (
             excluded_extensions
             if "EXCLUDED_EXTENSIONS" not in self.user_dict
@@ -910,17 +931,20 @@ class TaskConfig:
                                 self.leech_dests.insert(0, seat)
 
             # Determine primary dump upload destination (never the authorized source group chat):
-            # 1) Explicit -ud dump chat, 2) Explicit -up dump chat (if not PM),
-            # 3) Config.LEECH_LOG_CHAT, 4) First configured dump in self.leech_dests,
+            # 1) Bot Settings Dump (Config.LEECH_LOG_CHAT) — always upload here first when set,
+            #    then bot copies sequentially to User PM and all additional destinations.
+            # 2) Explicit -ud dump chat, 3) Explicit -up dump chat (if not PM),
+            # 4) First configured dump in self.leech_dests,
             # 5) Empty string "" -> uploads directly to User PM via TgClient.bot
-            if resolved_ud_seats:
+            parsed_bot_dump, parsed_bot_dump_thread = (
+                parse_dest(Config.LEECH_LOG_CHAT) if Config.LEECH_LOG_CHAT else ("", None)
+            )
+            if parsed_bot_dump and parsed_bot_dump != self.user_id:
+                self.up_dest, self.chat_thread_id = parsed_bot_dump, parsed_bot_dump_thread
+            elif resolved_ud_seats:
                 self.up_dest, self.chat_thread_id = resolved_ud_seats[0]
             elif self.cmd_up_dest and self.cmd_up_dest != self.user_id:
                 self.up_dest, self.chat_thread_id = self.cmd_up_dest, self.cmd_thread_id
-            elif Config.LEECH_LOG_CHAT:
-                parsed_log, parsed_log_thread = parse_dest(Config.LEECH_LOG_CHAT)
-                if parsed_log and parsed_log != self.user_id:
-                    self.up_dest, self.chat_thread_id = parsed_log, parsed_log_thread
             elif self.leech_dests:
                 self.up_dest, self.chat_thread_id = self.leech_dests[0]
             else:
@@ -2723,7 +2747,7 @@ class TaskConfig:
                     split_size = self.split_size
                 if not self.as_doc and (await get_document_type(f_path))[0]:
                     self.progress = True
-                    res = await ffmpeg.split(f_path, file_, parts, split_size)
+                    res = await ffmpeg.split(f_path, file_, parts, split_size, self.split_ext_suffix)
                 else:
                     self.progress = False
                     res = await split_file(f_path, split_size, self)

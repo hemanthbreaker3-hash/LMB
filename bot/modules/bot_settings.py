@@ -34,6 +34,7 @@ from .. import (
     task_dict,
     shortener_dict,
     excluded_extensions,
+    included_extensions,
     auth_chats,
     sudo_users,
     var_list,
@@ -168,6 +169,15 @@ DEFAULT_DESP = {
     "ENABLE_FFMPEG_CMDS": "Enable or disable custom FFmpeg command presets.",
     "EQUAL_SPLITS": "Split files into equal parts of LEECH_SPLIT_SIZE. Default: False.",
     "EXCLUDED_EXTENSIONS": "File extensions to exclude from upload. Space-separated.",
+    "INCLUDED_EXTENSIONS": "File extensions to include in download/upload. Space-separated.",
+    "SPLIT_EXT_SUFFIX": "Append split extension suffix on split files. Default: False.",
+    "FILES_LINKS": "Show direct file links in leech completion message. Default: False.",
+    "GALLERY_DL_OPTIONS": "Default gallery-dl JSON options.",
+    "TLDV_TOKEN": "tl;dv Bearer auth token.",
+    "TORBOX_API_KEY": "TorBox API key for -tb resolver.",
+    "CLONE_DUMP_CHATS": "Named clone dump chats dict.",
+    "BUZZHEAVIER_ACCOUNT_ID": "BuzzHeavier account ID.",
+    "BUZZHEAVIER_FOLDER_ID": "BuzzHeavier folder ID.",
     "FFMPEG_CMDS": "Custom FFmpeg command presets.",
     "FILELION_API": "FileLion.cc API key.",
     "MEDIA_STORE": "Store media metadata for re-upload. Default: True.",
@@ -778,6 +788,13 @@ async def edit_variable(_, message, pre_message, key):
         for x in fx:
             x = x.lstrip(".")
             excluded_extensions.append(x.strip().lower())
+    elif key == "INCLUDED_EXTENSIONS":
+        fx = value.split()
+        included_extensions.clear()
+        for x in fx:
+            x = x.strip().lower().lstrip(".")
+            if x:
+                included_extensions.append(f".{x}")
     elif key == "GDRIVE_ID":
         if drives_names and drives_names[0] == "Main":
             drives_ids[0] = value
@@ -822,6 +839,23 @@ async def edit_variable(_, message, pre_message, key):
                 )
                 return await update_buttons(pre_message, "var")
             value = value.strip() if (thread or isinstance(chat, str)) else chat
+    elif key in ("CLONE_DUMP_CHATS", "GALLERY_DL_OPTIONS"):
+        if isinstance(value, str):
+            v = value.strip()
+            if not v:
+                value = {} if key == "CLONE_DUMP_CHATS" else ""
+            elif v.startswith("{") and v.endswith("}"):
+                try:
+                    value = literal_eval(v)
+                except Exception:
+                    await send_message(message, "Invalid dict format!")
+                    return await update_buttons(pre_message, "var")
+            else:
+                await send_message(message, f"{key} must be a dict!")
+                return await update_buttons(pre_message, "var")
+        if value and not isinstance(value, dict):
+            await send_message(message, f"{key} must be a dict!")
+            return await update_buttons(pre_message, "var")
     elif key == "LEECH_DUMP_CHATS":
         if isinstance(value, str):
             if value.startswith("{") and value.endswith("}"):
@@ -907,6 +941,24 @@ async def edit_variable(_, message, pre_message, key):
     Config.set(key, value)
     if key == "CMD_SUFFIX":
         BotCommands.refresh_commands()
+        if Config.SET_COMMANDS:
+            try:
+                from pyrogram.types import BotCommand
+                from ..helper.ext_utils.help_messages import BOT_COMMANDS
+
+                await TgClient.bot.set_bot_commands(
+                    [
+                        BotCommand(
+                            cmds[0] if isinstance(cmds, list) else cmds,
+                            description,
+                        )
+                        for cmd, description in BOT_COMMANDS.items()
+                        for cmds in [getattr(BotCommands, f"{cmd}Command", None)]
+                        if cmds is not None
+                    ]
+                )
+            except Exception as e:
+                LOGGER.warning(f"Failed to refresh bot commands menu: {e}")
     elif key == "USER_SESSION_STRING":
         await TgClient.start_user()
         DEFAULT_VALUES["LEECH_SPLIT_SIZE"] = TgClient.MAX_SPLIT_SIZE

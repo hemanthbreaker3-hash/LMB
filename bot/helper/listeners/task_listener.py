@@ -40,6 +40,7 @@ from ..ext_utils.files_utils import (
     get_path_size,
     join_files,
     remove_excluded_files,
+    remove_non_included_files,
     move_and_merge,
 )
 from ..ext_utils.links_utils import is_gdrive_id
@@ -638,6 +639,8 @@ class TaskListener(TaskConfig):
             self.clear()
 
         await remove_excluded_files(self.up_dir or self.dir, self.excluded_extensions)
+        if getattr(self, "included_extensions", None):
+            await remove_non_included_files(self.up_dir or self.dir, self.included_extensions)
 
         if getattr(self, "track_manager", False):
             from ..ext_utils.track_manager import proceed_track_manager
@@ -702,6 +705,8 @@ class TaskListener(TaskConfig):
             self.size = await get_path_size(up_dir)
             self.clear()
             await remove_excluded_files(up_dir, self.excluded_extensions)
+            if getattr(self, "included_extensions", None):
+                await remove_non_included_files(up_dir, self.included_extensions)
 
         # Merge runs later: after all processing, immediately before compress/upload.
 
@@ -1016,28 +1021,41 @@ class TaskListener(TaskConfig):
             and Config.DATABASE_URL
         ):
             await database.rm_complete_task(self.message.link)
+        msg_date = getattr(self.message, "date", None)
+        elapsed_sec = (time() - msg_date.timestamp()) if msg_date else 0
         msg = (
-            f"<b>📦 {escape(self.name)}</b>\n\n"
-            f"<blockquote>• <b>Task Size:</b> {get_readable_file_size(self.size)}\n"
-            f"• <b>Time Elapsed:</b> {get_readable_time(time() - self.message.date.timestamp())}\n"
-            f"• <b>In Mode:</b> {self.mode[0]}\n"
-            f"• <b>Out Mode:</b> {self.mode[1]}</blockquote>"
+            f"<b>✅ {escape(self.name)}</b>\n\n"
+            f"<blockquote>• <b>Size:</b> {get_readable_file_size(self.size)}\n"
+            f"• <b>Elapsed:</b> {get_readable_time(elapsed_sec)}\n"
+            f"• <b>Mode:</b> {escape(str(self.mode[0]))} ➜ {escape(str(self.mode[1]))}</blockquote>"
         )
         LOGGER.info(f"Task Done: {self.name}")
         if self.is_leech:
-            msg += f"\n┠ <b>Total Files: </b>{folders}"
+            ok_files = max(0, int(folders or 0) - int(mime_type or 0))
+            msg += f"\n• <b>Files:</b> {ok_files}/{folders}"
             if mime_type != 0:
-                msg += f"\n┠ <b>Corrupted Files</b> → {mime_type}"
-            msg += f"\n┖ <b>Task By</b> → {self.tag}\n\n"
+                msg += f" <i>({mime_type} skipped/corrupted)</i>"
+            msg += f"\n• <b>User:</b> {self.tag}\n\n"
 
+            files_links_on = bool(
+                self.user_dict.get("FILES_LINKS")
+                or (Config.FILES_LINKS and "FILES_LINKS" not in self.user_dict)
+            )
             if self.is_super_chat:
-                pmsg = msg
-                pmsg += "〶 <b><u>Action Performed :</u></b>\n"
-                pmsg += "⋗ <i>File(s) have been sent to User PM</i>\n\n"
+                pmsg = (
+                    f"{msg}"
+                    "<b>📬 Delivery Complete</b>\n"
+                    "<blockquote>Files have been delivered to your Bot PM and configured destinations in sequence.</blockquote>\n"
+                )
+                if files_links_on and files:
+                    pmsg += "\n<b>📂 Files:</b>\n" + "\n".join(
+                        f"{idx}. <a href='{escape(str(lnk), quote=True)}'>{escape(str(nm))}</a>"
+                        for idx, (lnk, nm) in enumerate(list(files.items())[:25], start=1)
+                    ) + "\n"
                 pm_btns = ButtonMaker()
                 if TgClient.BNAME:
                     pm_btns.url_button(
-                        "📁 View Files in Bot PM",
+                        "📁 Open Bot PM",
                         f"https://t.me/{TgClient.BNAME}",
                         style=ButtonStyle.PRIMARY,
                     )
@@ -1049,27 +1067,29 @@ class TaskListener(TaskConfig):
             if not files:
                 await send_message(log_chat, msg)
             else:
-                msg += "〶 <b><u>Files List :</u></b>\n"
+                msg += "<b>📂 Delivered Files</b>\n"
                 fmsg = ""
                 for index, (link, name) in enumerate(files.items(), start=1):
-                    fmsg += f"{index}. <a href='{link}'>{name}</a>"
+                    safe_link = escape(str(link), quote=True)
+                    safe_name = escape(str(name))
+                    fmsg += f"{index}. <a href='{safe_link}'>{safe_name}</a>"
                     if Config.MEDIA_STORE and (
                         self.is_super_chat or Config.LEECH_LOG_CHAT or self.up_dest
                     ):
-                        parts = link.split("/")[-2:]
+                        parts = str(link).split("/")[-2:]
                         if len(parts) == 2:
                             chat_id, msg_id = parts
                             if chat_id.isdigit():
                                 chat_id = f"-100{chat_id}"
                             flink = f"https://t.me/{TgClient.BNAME}?start={encode_slink('file' + chat_id + '&&' + msg_id)}"
-                            fmsg += f"\n┠ <b>Get Media</b> → <a href='{flink}'>Store Link</a> | <a href='https://t.me/share/url?url={flink}'>Share Link</a>"
+                            fmsg += f"\n   ├ <a href='{flink}'>Store Link</a> · <a href='https://t.me/share/url?url={flink}'>Share</a>"
                             from ...modules.stream import gen_stream_link
 
                             slinks = await gen_stream_link(chat_id, msg_id)
                             if slinks:
-                                fmsg += f"\n┖ <b>Direct</b> → <a href='{slinks[0]}'>Stream</a> | <a href='{slinks[1]}'>Download</a>"
+                                fmsg += f"\n   └ <a href='{escape(str(slinks[0]), quote=True)}'>Stream</a> · <a href='{escape(str(slinks[1]), quote=True)}'>Download</a>"
                     fmsg += "\n"
-                    if len(fmsg.encode() + msg.encode()) > 4000:
+                    if len(fmsg.encode() + msg.encode()) > 3800:
                         await send_message(log_chat, msg + fmsg)
                         await sleep(1)
                         fmsg = ""
@@ -1239,6 +1259,20 @@ class TaskListener(TaskConfig):
 
             await delete_magnet(magnet_id)
             self._alldebrid_magnet_id = 0
+        if tb_tid := getattr(self, "_torbox_torrent_id", 0) or 0:
+            from ..mirror_leech_utils.download_utils.torbox_resolver import (
+                delete_torrent as tb_delete_torrent,
+            )
+
+            await tb_delete_torrent(tb_tid)
+            self._torbox_torrent_id = 0
+        if tb_wid := getattr(self, "_torbox_web_id", 0) or 0:
+            from ..mirror_leech_utils.download_utils.torbox_resolver import (
+                delete_web_download as tb_delete_web,
+            )
+
+            await tb_delete_web(tb_wid)
+            self._torbox_web_id = 0
         msg = (
             f"<b>⚠️ Task Size Limit Exceeded</b>\n\n"
             f"<blockquote>• <b>Task Size:</b> {get_readable_file_size(self.size)}\n"
@@ -1326,6 +1360,9 @@ class TaskListener(TaskConfig):
                 non_queued_dl.remove(self.mid)
             if self.mid in non_queued_up:
                 non_queued_up.remove(self.mid)
+
+        if hasattr(self, "done_event") and self.done_event and not self.done_event.done():
+            self.done_event.set_result(False)
 
         await start_from_queued()
         await sleep(3)

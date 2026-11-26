@@ -521,3 +521,19 @@ class SevenZ:
                 stderr = "Unable to decode the error!"
             LOGGER.error(f"{stderr}. Unable to zip this path: {dl_path}")
             return dl_path
+
+
+async def remove_non_included_files(fpath, ie):
+    if not ie:
+        return
+    exts = tuple(f".{str(x).strip().lower().lstrip('.')}" for x in ie if str(x).strip())
+    if not exts:
+        return
+    walk_data = await sync_to_async(lambda: list(walk(fpath)))
+    for root, _, files in walk_data:
+        if root.strip().endswith("/yt-dlp-thumb") or root.strip().endswith("_mltbss"):
+            continue
+        for f in files:
+            if f.strip().lower().endswith(exts):
+                continue
+            await remove(ospath.join(root, f))

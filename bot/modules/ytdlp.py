@@ -324,6 +324,7 @@ class YtDlp(TaskListener):
             "-s": False,
             "-b": False,
             "-z": False,
+            "-ses": False,
             "-sv": False,
             "-ss": False,
             "-f": False,
@@ -414,6 +415,7 @@ class YtDlp(TaskListener):
         self.rc_flags = args["-rcf"]
         self.link = args["link"]
         self.compress = args["-z"]
+        self.split_ext_suffix = args["-ses"]
         self.extract = args["-e"]
         self.force_audio_split = bool(args.get("-as") or args.get("-audosplit"))
         self.join = args["-j"]

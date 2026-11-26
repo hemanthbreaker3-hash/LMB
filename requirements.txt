@@ -46,3 +46,4 @@ pycryptodome
 bgutil-ytdlp-pot-provider==2.0.2
 numpy>=1.26,<3
 beautifulsoup4
+gallery-dl

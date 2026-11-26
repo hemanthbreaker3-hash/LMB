@@ -339,7 +339,10 @@ def get_bot_commands():
         "UpHoster": "[link/file] Upload to DDL hosters",
         "Leech": "[link/file] Leech task to Telegram",
         "QbLeech": "[magnet/torrent] Leech using qBittorrent",
-        "YtdlLeech": "[link] Leech YouTube and supported websites",
+        "Gallerydl": "[link] Mirror supported sites via gallery-dl",
+    "GallerydlLeech": "[link] Leech supported sites via gallery-dl",
+    "NzbSearch": "[query] Search NZBHydra2",
+    "YtdlLeech": "[link] Leech YouTube and supported websites",
         "Clone": "[link] Copy files/folders to Google Drive or Rclone",
         "UserSet": "Manage personal user settings",
         "ForceStart": "[gid/reply] Force start queued task",
@@ -438,6 +441,10 @@ def get_help_string():
         elif key == "Count":
             help_lines.append(
                 f"<b>{cmd_str}</b> [drive_url]: Count items in Google Drive folder."
+            )
+        elif key == "LeechDel":
+            help_lines.append(
+                f"<b>{cmd_str}</b> [t.me_link]: Delete all leech replies for a message (SUDO)."
             )
         elif key == "Delete":
             help_lines.append(
@@ -552,3 +559,22 @@ YT_HELP_DICT = {
 
 
 help_string = get_help_string()
+
+
+gdl_main = """<b>Send link along with command line</b>:
+
+/cmd link
+<b>By replying to link</b>:
+/cmd -n new name -z password -opt {"key": "value"}
+
+Check here all supported <a href='https://github.com/mikf/gallery-dl/blob/master/docs/supportedsites.md'>SITES</a>
+Check gallery-dl configuration options from this <a href='https://github.com/mikf/gallery-dl/blob/master/docs/configuration.rst'>FILE</a>."""
+
+gdl_opt = """<b>Options</b>: -opt
+
+/cmd link -opt {"cookies": "cookies.txt", "image-range": "1-50"}"""
+
+GDL_HELP_DICT = {
+    "main": gdl_main,
+    "Options": gdl_opt,
+}
