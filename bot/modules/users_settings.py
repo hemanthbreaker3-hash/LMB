@@ -21,7 +21,7 @@ from pyrogram.handlers import MessageHandler
 from pyrogram.types import ReplyParameters
 
 
-from .. import auth_chats, excluded_extensions, sudo_users, user_data
+from .. import LOGGER, auth_chats, excluded_extensions, sudo_users, user_data
 from ..core.config_manager import Config
 from ..core.seedr_client import SeedrClient
 from ..core.tg_client import TgClient

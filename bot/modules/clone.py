@@ -6,7 +6,7 @@ from shlex import split as shlex_split
 from aiofiles.os import remove
 
 from .. import LOGGER, bot_loop, task_dict, task_dict_lock
-from ..core.config_manager import BinConfig
+from ..core.config_manager import BinConfig, Config
 from ..helper.ext_utils.bot_utils import (
     COMMAND_USAGE,
     arg_parser,
