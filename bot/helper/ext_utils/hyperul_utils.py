@@ -33,7 +33,7 @@ from ..ext_utils.media_utils import (
     get_video_thumbnail,
 )
 from ..ext_utils.bot_utils import parse_dest
-from ..ext_utils.tmdb_utils import get_auto_thumbnail
+from ..ext_utils.tmdb_utils import get_auto_cover, get_auto_thumbnail, user_lang
 
 
 class HypertgUpload(HypertgTransfer):
@@ -160,13 +160,22 @@ class HypertgUpload(HypertgTransfer):
                     from ..ext_utils.media_utils import format_tg_thumbnail
                     from ..ext_utils.bot_utils import sync_to_async
 
+                    u_lang = user_lang(
+                        getattr(self._listener, "user", None)
+                        or getattr(getattr(self._listener, "message", None), "from_user", None)
+                    )
                     thumb = await wait_for(
                         get_auto_thumbnail(
                             self._up_file or self._listener.name or file_path,
                             force_document or self._listener.as_doc,
+                            u_lang,
                         ),
                         timeout=8.0,
                     )
+                    if not hd_cover and thumb:
+                        auto_cov = get_auto_cover(thumb)
+                        if auto_cov and await aiopath.isfile(auto_cov):
+                            hd_cover = auto_cov
                     if thumb and await aiopath.isfile(thumb):
                         formatted = await sync_to_async(
                             format_tg_thumbnail, thumb, None, True

@@ -799,6 +799,15 @@ async def get_user_settings(from_user, stype="main"):
         has_thumb = await aiopath.exists(thumbpath)
         thumb_mode = user_dict.get("THUMBNAIL_MODE") or ("custom" if has_thumb else "auto")
         buttons.data_button("Thumbnail", f"{_cb_prefix()} {user_id} thumb_select")
+        auto_thumb_on = user_dict.get("AUTO_THUMBNAIL")
+        if auto_thumb_on is None:
+            auto_thumb_on = getattr(Config, "AUTO_THUMBNAIL", True) and (
+                user_dict.get("THUMBNAIL_MODE") in (None, "auto")
+            )
+        buttons.data_button(
+            f"{'✅ ' if auto_thumb_on else ''}Auto Thumbnail",
+            f"{_cb_prefix()} {user_id} auto_thumb",
+        )
         thumbmsg = f"{thumb_mode.title()} ({'Exists' if has_thumb else 'Not Exists'})"
         buttons.data_button(
             "Leech Split Size", f"{_cb_prefix()} {user_id} menu LEECH_SPLIT_SIZE"
@@ -3013,9 +3022,32 @@ async def _edit_user_settings_impl(client, query):
     ]:
         await query.answer()
         await update_user_settings(query, data[2])
+    elif data[2] == "auto_thumb":
+        cur_auto = user_dict.get("AUTO_THUMBNAIL")
+        if cur_auto is None:
+            cur_auto = getattr(Config, "AUTO_THUMBNAIL", True) and (
+                user_dict.get("THUMBNAIL_MODE") in (None, "auto")
+            )
+        if not cur_auto and not str(getattr(Config, "TMDB_ACCESS_TOKEN", "") or "").strip():
+            return await query.answer(
+                "Owner must set TMDB_ACCESS_TOKEN in Bot Settings first!",
+                show_alert=True,
+            )
+        new_auto = not bool(cur_auto)
+        _set_ud(user_id, "AUTO_THUMBNAIL", new_auto)
+        _set_ud(user_id, "THUMBNAIL_MODE", "auto" if new_auto else ("custom" if await aiopath.exists(thumb_path) else "none"))
+        await database.update_user_data(user_id)
+        await query.answer(f"Auto Thumbnail {'enabled' if new_auto else 'disabled'}!")
+        await update_user_settings(query, "leech")
     elif data[2] == "thumb_mode":
         mode = data[3]
+        if mode == "auto" and not str(getattr(Config, "TMDB_ACCESS_TOKEN", "") or "").strip():
+            return await query.answer(
+                "Owner must set TMDB_ACCESS_TOKEN in Bot Settings first!",
+                show_alert=True,
+            )
         _set_ud(user_id, "THUMBNAIL_MODE", mode)
+        _set_ud(user_id, "AUTO_THUMBNAIL", mode == "auto")
         await database.update_user_data(user_id)
         if mode == "custom" and not await aiopath.exists(thumb_path):
             await query.answer("Please set a custom thumbnail image!", show_alert=True)
