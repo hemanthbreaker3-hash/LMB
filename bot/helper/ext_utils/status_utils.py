@@ -445,5 +445,5 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
         "♻️ Refresh", f"status {sid} ref", position="header", style=ButtonStyle.PRIMARY
     )
     button = buttons.build_menu(8)
-    msg += f" | ⚡ <b>CPU:</b> {cpu_percent()}% | 💾 <b>Free Disk:</b> {get_readable_file_size(disk_usage(DOWNLOAD_DIR).free)} ({round(100 - disk_usage(DOWNLOAD_DIR).percent, 1)}%) | 🧠 <b>RAM:</b> {virtual_memory().percent}% | ⏱️ <b>Uptime:</b> {get_readable_time(time() - bot_start_time)}"
+    msg += f"\n⚡ <b>CPU:</b> {cpu_percent()}% · 💾 <b>Free:</b> {get_readable_file_size(disk_usage(DOWNLOAD_DIR).free)} ({round(100 - disk_usage(DOWNLOAD_DIR).percent, 1)}%) · 🧠 <b>RAM:</b> {virtual_memory().percent}% · ⏱️ <b>Up:</b> {get_readable_time(time() - bot_start_time)}"
     return msg, button
