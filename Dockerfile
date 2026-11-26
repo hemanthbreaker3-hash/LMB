@@ -24,7 +24,8 @@ RUN apt-get update -qq && apt-get install -y --reinstall \
     test -x /usr/bin/aria2c && /usr/bin/aria2c --version >/dev/null && ffmpeg -version >/dev/null && 7z --help >/dev/null && rclone --version >/dev/null && qbittorrent-nox --version >/dev/null && \
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip uninstall --python /wzvenv/bin/python -y pyrogram kurigram pyrofork wzgram wzxpyro || true && \
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip install --python /wzvenv/bin/python --no-cache-dir -U -r requirements.txt && \
-    PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip install --python /wzvenv/bin/python --no-cache-dir -U "cbgram[fast]" cbcrypto
+    PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip install --python /wzvenv/bin/python --no-cache-dir -U "cbgram[fast]" cbcrypto && \
+    (/wzvenv/bin/python -c "from mega import MegaApi" 2>/dev/null || uv pip uninstall --python /wzvenv/bin/python -y mega mega.py || true)
 
 COPY . .
 

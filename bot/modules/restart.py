@@ -1,4 +1,4 @@
-from asyncio import gather, get_event_loop, sleep
+from asyncio import gather, get_event_loop, sleep, wait_for
 from datetime import datetime
 from importlib import reload as reload_module
 from os import execl as osexecl
@@ -268,20 +268,20 @@ async def confirm_restart(_, query):
         if data[2] == "soft":
             restart_msg = await send_message(
                 reply_to or message,
-                "<b>🔄 Reloading bot modules...</b>\\n\\nPlease wait.",
+                "<b>🔄 Reloading bot modules...</b>\n\nPlease wait.",
             )
             await notify_owner_and_sudos("Soft Reloading")
             try:
                 await _runtime_reload()
                 result_text = (
-                    "<b>✅ Soft Reload Completed</b>\\n\\n"
+                    "<b>✅ Soft Reload Completed</b>\n\n"
                     + _restart_header(datetime.now(timezone(Config.TIMEZONE)))
                 )
                 await notify_owner_and_sudos("Soft Reload Completed")
             except Exception as e:
                 LOGGER.exception("Soft reload failed")
                 result_text = (
-                    "<b>❌ Soft Reload Failed</b>\\n\\n"
+                    "<b>❌ Soft Reload Failed</b>\n\n"
                     "<blockquote>The bot could not reload all modules. "
                     "Check the bot logs; use /restart for a full process restart.</blockquote>"
                 )
@@ -379,7 +379,13 @@ async def confirm_restart(_, query):
                     pass
 
             try:
-                await TgClient.stop()
+                async with aiopen(".restartmsg", "w") as f:
+                    await f.write(f"{restart_message.chat.id}\n{restart_message.id}\n")
+            except Exception:
+                LOGGER.exception("Restart: could not save restart notification")
+
+            try:
+                await wait_for(TgClient.stop(), timeout=5.0)
             except Exception:
                 LOGGER.exception("Restart: Telegram client shutdown failed; continuing restart")
 
@@ -391,11 +397,14 @@ async def confirm_restart(_, query):
                 LOGGER.exception("Restart: thread-pool shutdown failed; continuing restart")
 
             try:
-                await cmd_exec(
-                    [
-                        "pkill", "-9", "-f",
-                        f"gunicorn|{BinConfig.ARIA2_NAME}|{BinConfig.QBIT_NAME}|{BinConfig.FFMPEG_NAME}|{BinConfig.RCLONE_NAME}|java|{BinConfig.SABNZBD_NAME}|7z|split",
-                    ]
+                await wait_for(
+                    cmd_exec(
+                        [
+                            "pkill", "-9", "-f",
+                            f"gunicorn|{BinConfig.ARIA2_NAME}|{BinConfig.QBIT_NAME}|{BinConfig.FFMPEG_NAME}|{BinConfig.RCLONE_NAME}|java|{BinConfig.SABNZBD_NAME}|7z|split",
+                        ]
+                    ),
+                    timeout=5.0,
                 )
             except Exception:
                 LOGGER.exception("Restart: optional process cleanup failed; continuing restart")
@@ -403,15 +412,9 @@ async def confirm_restart(_, query):
             # Updating the checkout is optional. Never let update.py prevent
             # the bot process from being relaunched.
             try:
-                await cmd_exec([executable, "update.py"])
+                await wait_for(cmd_exec([executable, "update.py"]), timeout=15.0)
             except Exception:
                 LOGGER.exception("Restart: update.py failed; continuing restart")
-
-            try:
-                async with aiopen(".restartmsg", "w") as f:
-                    await f.write(f"{restart_message.chat.id}\n{restart_message.id}\n")
-            except Exception:
-                LOGGER.exception("Restart: could not save restart notification")
 
             # Replace this process in-place. Under systemd, the service manager
             # already supervises this PID and will observe the exec'd bot process.
@@ -463,6 +466,9 @@ async def _runtime_reload():
         "bot.modules.status",
         "bot.modules.users_settings",
         "bot.modules.ytdlp",
+        "bot.modules.gallery_dl",
+        "bot.modules.leech_del",
+        "bot.modules.nzb_search",
     ]
 
     for mod_name in modules_to_reload:
