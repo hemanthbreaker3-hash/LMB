@@ -1,3 +1,4 @@
+import os
 import re
 from asyncio import Lock, sleep
 from os import path as ospath
@@ -88,8 +89,18 @@ class TelegramDownloadHelper:
             self._listener.up_dest if self._listener.is_leech else None
         ) or Config.LEECH_LOG_CHAT
         personal_mode = self._listener.user_dict.get("TELEGRAM_SESSION_MODE", "disabled")
+        rust_core_on = os.environ.get("CBGRAM_RUST_CORE", "1").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
+        self._cb_native = rust_core_on
+        # Use native cbgram + cbcrypto Rust download_media(file_name=path) by default.
+        # Only fall back to legacy pure-Python HypertgDownload if CBGRAM_RUST_CORE=0.
         self._hyper_dl = (
-            Config.USE_HYPER
+            not rust_core_on
+            and Config.USE_HYPER
             and personal_mode not in ("telegram", "both")
             and (
                 TgClient.user is not None
@@ -99,6 +110,7 @@ class TelegramDownloadHelper:
             )
         )
         self._hyper_dl_instance = None
+        self._active_helper_client = None
 
     @property
     def speed(self):
@@ -116,7 +128,11 @@ class TelegramDownloadHelper:
         self._id = file_id
         async with task_dict_lock:
             task_dict[self._listener.mid] = TelegramStatus(
-                self._listener, self, gid, "dl", "hdl" if self._hyper_dl else ""
+                self._listener,
+                self,
+                gid,
+                "dl",
+                "cb" if self._cb_native else ("hdl" if self._hyper_dl else ""),
             )
         if not from_queue:
             await self._listener.on_download_start()
@@ -131,7 +147,9 @@ class TelegramDownloadHelper:
             # stop_transmission raises Pyrogram's StopTransmission by design.
             # Let it propagate so the active transfer stops; restart shutdown
             # separately suppresses retries and directory cleanup.
-            if self.session == "user" and self._user_client is not None:
+            if self._active_helper_client is not None:
+                self._active_helper_client.stop_transmission()
+            elif self.session == "user" and self._user_client is not None:
                 self._user_client.stop_transmission()
             elif self.session == "hbots":
                 for hbot in TgClient.helper_bots.values():
@@ -205,6 +223,9 @@ class TelegramDownloadHelper:
                             file_name=path, progress=self._on_download_progress
                         )
             else:
+                # Native cbgram + cbcrypto Rust file-path download (https://cbgram.pages.dev/):
+                # Always pass a real file_name path (never in_memory=True) so cbcrypto
+                # handles MTProto sockets, pacing, AES-CTR decryption, and disk writes in Rust.
                 use_user = (
                     self._user_client is not None
                     and not getattr(self._listener, "bot_trans", False)
@@ -215,14 +236,22 @@ class TelegramDownloadHelper:
                     try:
                         user_msg = None
                         try:
-                            await TgClient.ensure_peer(
-                                self._user_client, message.chat.id, fallback_client=TgClient.bot
-                            )
                             user_msg = await self._user_client.get_messages(
                                 chat_id=message.chat.id, message_ids=message.id
                             )
                         except Exception:
                             user_msg = None
+
+                        if user_msg is None or getattr(user_msg, "empty", False):
+                            try:
+                                await TgClient.ensure_peer(
+                                    self._user_client, message.chat.id, fallback_client=TgClient.bot
+                                )
+                                user_msg = await self._user_client.get_messages(
+                                    chat_id=message.chat.id, message_ids=message.id
+                                )
+                            except Exception:
+                                user_msg = None
 
                         if (user_msg is None or getattr(user_msg, "empty", False)) and self._dump_chat:
                             from ...ext_utils.bot_utils import parse_dest
@@ -253,8 +282,60 @@ class TelegramDownloadHelper:
                     except Exception as u_err:
                         if self._listener.is_cancelled:
                             return False
-                        LOGGER.warning(f"User session cbgram download_media failed ({u_err}); falling back to bot")
+                        LOGGER.warning(f"User session cbgram download_media failed ({u_err}); falling back to helper/bot")
                         download = None
+
+                if (
+                    download is None
+                    and not self._listener.is_cancelled
+                    and (TgClient.helper_users or TgClient.helper_bots)
+                ):
+                    media_obj = getattr(message, message.media.value, None) if getattr(message, "media", None) else None
+                    f_size = int(getattr(media_obj, "file_size", 0) or 0)
+                    h_client, h_kind = TgClient.pick_least_loaded(
+                        prefer_premium=f_size > TgClient.BOT_MAX_BYTES
+                    )
+                    if h_client is not None and h_client is not TgClient.bot and h_client is not self._user_client:
+                        self._active_helper_client = h_client
+                        self.session = h_kind
+                        try:
+                            h_msg = None
+                            try:
+                                h_msg = await h_client.get_messages(
+                                    chat_id=message.chat.id, message_ids=message.id
+                                )
+                            except Exception:
+                                h_msg = None
+                            if (h_msg is None or getattr(h_msg, "empty", False)) and self._dump_chat:
+                                from ...ext_utils.bot_utils import parse_dest
+                                dc_id, _ = parse_dest(self._dump_chat)
+                                if isinstance(dc_id, int) and dc_id != message.chat.id:
+                                    copied = await TgClient.bot.copy_message(
+                                        chat_id=dc_id,
+                                        from_chat_id=message.chat.id,
+                                        message_id=message.id,
+                                        disable_notification=True,
+                                    )
+                                    if copied:
+                                        self._listener.dump_chat = dc_id
+                                        self._listener.dump_msg_id = copied.id
+                                        h_msg = await h_client.get_messages(
+                                            chat_id=dc_id, message_ids=copied.id
+                                        )
+                            if h_msg is not None and not getattr(h_msg, "empty", False):
+                                download = await h_client.download_media(
+                                    h_msg,
+                                    file_name=path,
+                                    progress=self._on_download_progress,
+                                )
+                        except Exception as h_err:
+                            if self._listener.is_cancelled:
+                                return False
+                            LOGGER.warning(f"Helper cbgram download_media failed ({h_err}); falling back to bot")
+                            download = None
+                        finally:
+                            self._active_helper_client = None
+                            TgClient.release_load(h_client)
 
                 if download is None and not self._listener.is_cancelled:
                     self.session = "bot"

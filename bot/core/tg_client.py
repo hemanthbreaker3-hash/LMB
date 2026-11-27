@@ -284,12 +284,19 @@ class TgClient:
         client.warm_fast_upload_sessions = warm_fast_upload_sessions
         client._close_fast_upload_sessions = _close_media_sessions
         client._cb_fast_upload_installed = True
+        try:
+            import cbcrypto
+            _cb_backend = cbcrypto.backend() if hasattr(cbcrypto, "backend") else "active"
+        except Exception:
+            _cb_backend = "unavailable"
         LOGGER.info(
-            "LMB cbgram upload engine ready "
-            "(cbcrypto Rust core=%s, uvloop=%s, max_concurrent=%s)",
+            "LMB cbgram engine ready "
+            "(cbcrypto Rust core=%s backend=%s, uvloop=%s, max_concurrent=%s, workers=%s)",
             os.environ.get("CBGRAM_RUST_CORE", "1"),
+            _cb_backend,
             os.environ.get("CBGRAM_UVLOOP", "1"),
-            os.environ.get("CBGRAM_MAX_CONCURRENT", "512"),
+            os.environ.get("CBGRAM_MAX_CONCURRENT", "1024"),
+            os.environ.get("CBGRAM_WORKERS", "256"),
         )
         return client
 

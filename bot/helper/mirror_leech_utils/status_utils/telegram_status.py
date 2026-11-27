@@ -14,6 +14,7 @@ class TelegramStatus:
         self._gid = gid
         self._status = status
         self.engine = EngineStatus().STATUS_TGRAM + {
+            "cb": " (cbgram)",
             "hdl": " (HyperDL)",
             "hul": " (HyperUP)",
         }.get(hyper, "")
