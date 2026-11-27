@@ -33,6 +33,7 @@ from ..ext_utils.media_utils import (
     get_video_thumbnail,
 )
 from ..ext_utils.bot_utils import parse_dest
+from ..ext_utils.flood_guard import note_floodwait, wait_if_needed
 from ..ext_utils.tmdb_utils import get_auto_cover, get_auto_thumbnail, user_lang
 
 
@@ -251,6 +252,7 @@ class HypertgUpload(HypertgTransfer):
             or (isinstance(upload_chat_id, int) and upload_chat_id > 0)
         )
 
+        await TgClient.ensure_user_client()
         _, part_needs_user = await self._get_upload_client_for_part(file_path)
         # Primary upload to leech_chat / leech_dump_chats must use USER_SESSION_STRING
         # whenever configured; Private PM delivery always uses bot session only.
@@ -373,11 +375,14 @@ class HypertgUpload(HypertgTransfer):
         while True:
             if self._listener.is_cancelled:
                 raise StopTransmission()
+            await wait_if_needed("ul")
             try:
                 return await send_func(**kwargs)
             except (FloodWait, FloodPremiumWait) as f:
-                LOGGER.warning(f"HypertgUL flood {f.value}s on {self._up_file}")
-                await sleep(f.value + 1)
+                val = getattr(f, "value", 5)
+                LOGGER.warning(f"HypertgUL flood {val}s on {self._up_file}")
+                await note_floodwait(val, account="ul")
+                await sleep(min(val + 1, 45))
             except (TimeoutError, ConnectionError, OSError) as net_err:
                 transient_attempts += 1
                 if transient_attempts >= 3 or self._listener.is_cancelled:
@@ -618,6 +623,7 @@ class HypertgUpload(HypertgTransfer):
             else:
                 kwargs["document"] = file_path
 
+            await TgClient.ensure_peer(client, chat_id, fallback_client=TgClient.bot)
             sent = await self._try_send(key, client, kwargs)
             return sent
         finally:
@@ -719,6 +725,7 @@ class HypertgUpload(HypertgTransfer):
             )
 
         try:
+            await TgClient.ensure_peer(client, chat_id, fallback_client=TgClient.bot)
             return await self._try_send(key, client, kwargs)
         except Exception as err:
             # If user_session failed on a dump chat, fallback to TgClient.bot (or bot bridge for >2 GiB)

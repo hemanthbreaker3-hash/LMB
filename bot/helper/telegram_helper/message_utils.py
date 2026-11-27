@@ -393,32 +393,6 @@ def parse_tg_link(link: str):
 
 async def get_tg_link_message(link, range_mode="normal", user_id=None, user_dict=None):
     chat, msg_ids, private = parse_tg_link(link)
-
-    # Prefer the requesting user's configured personal session.  This is
-    # intentionally independent of the global OWNER/USER_SESSION_STRING so
-    # one user's private Telegram access cannot be reused by another user.
-    personal_user = None
-    if user_id is not None:
-        try:
-            from ... import user_data
-            uid = int(user_id)
-            data = user_dict if isinstance(user_dict, dict) else user_data.get(uid, {})
-            session_string = data.get("TELEGRAM_SESSION_STRING") if data else None
-            session_mode = data.get("TELEGRAM_SESSION_MODE", "both") if data else "disabled"
-            if session_string and session_mode != "disabled":
-                personal_user = await TgClient.get_personal_user(uid, session_string)
-                if personal_user:
-                    LOGGER.info(f"Using personal Telegram session for user {uid} to resolve {link}")
-        except Exception as e:
-            LOGGER.warning(f"Failed to initialize personal Telegram session for user {user_id}: {e}")
-
-    session_user = personal_user or TgClient.user
-    if private and not session_user:
-        raise TgLinkException(
-            "🔐 Private Telegram link requires your configured session string. "
-            "Open Settings → Telegram Session and set a valid session string."
-        )
-
     is_range = isinstance(msg_ids, list)
 
     if is_range and range_mode == "each":
@@ -431,7 +405,9 @@ async def get_tg_link_message(link, range_mode="normal", user_id=None, user_dict
                 links_list.append(f"https://t.me/{chat}/{mid}")
         return links_list, "bot"
 
-    if not private:
+    # 1. Try bot session first (works for public channels and private chats where bot is member)
+    bot_err = None
+    if TgClient.bot is not None:
         try:
             messages = await TgClient.bot.get_messages(chat_id=chat, message_ids=msg_ids)
             if is_range:
@@ -440,40 +416,65 @@ async def get_tg_link_message(link, range_mode="normal", user_id=None, user_dict
                 valid_msgs = [m for m in messages if m and not getattr(m, "empty", False)]
                 if valid_msgs:
                     return valid_msgs, "bot"
-                private = True
             else:
                 if messages and not getattr(messages, "empty", False):
                     return messages, "bot"
-                private = True
         except Exception as e:
-            private = True
-            if not session_user:
-                raise e
+            bot_err = e
 
-    if session_user:
+    # 2. Fallback to Bot Settings USER_SESSION_STRING (TgClient.user)
+    bot_user = await TgClient.ensure_user_client()
+    # 3. Fallback to Misc Settings personal session (for channel access / reference retrieval only)
+    personal_user = None
+    if user_id is not None:
         try:
-            await TgClient.ensure_peer(session_user, chat, fallback_client=TgClient.bot)
-            user_messages = await session_user.get_messages(chat_id=chat, message_ids=msg_ids)
+            from ... import user_data
+            uid = int(user_id)
+            data = user_dict if isinstance(user_dict, dict) else user_data.get(uid, {})
+            session_string = data.get("TELEGRAM_SESSION_STRING") if data else None
+            session_mode = data.get("TELEGRAM_SESSION_MODE", "both") if data else "disabled"
+            if session_string and session_mode != "disabled":
+                personal_user = await TgClient.get_personal_user(uid, session_string)
+        except Exception as e:
+            LOGGER.warning(f"Failed to initialize personal Telegram session for user {user_id}: {e}")
+
+    session_candidates = []
+    for cand, label in ((bot_user, "bot_user"), (personal_user, "personal_user")):
+        if cand is not None and all(c is not cand for c, _ in session_candidates):
+            session_candidates.append((cand, label))
+
+    if not session_candidates:
+        if bot_err and not private:
+            raise bot_err
+        raise TgLinkException(
+            "🔐 Private Telegram link requires a configured session string. "
+            "Configure USER_SESSION_STRING in Bot Settings or set a session string in Misc Settings."
+        )
+
+    last_err = bot_err
+    for sess_client, label in session_candidates:
+        try:
+            await TgClient.ensure_peer(sess_client, chat, fallback_client=TgClient.bot)
+            user_messages = await sess_client.get_messages(chat_id=chat, message_ids=msg_ids)
             if is_range:
                 if not isinstance(user_messages, list):
                     user_messages = [user_messages]
                 valid_msgs = [m for m in user_messages if m and not getattr(m, "empty", False)]
                 if valid_msgs:
+                    if label == "personal_user":
+                        LOGGER.info(f"Resolved {link} via personal session fallback for user {user_id}")
                     return valid_msgs, "user"
-                raise TgLinkException("No valid messages found in the specified range!")
             else:
                 if user_messages and not getattr(user_messages, "empty", False):
+                    if label == "personal_user":
+                        LOGGER.info(f"Resolved {link} via personal session fallback for user {user_id}")
                     return user_messages, "user"
-                raise TgLinkException("Message not found or empty!")
         except Exception as e:
-            raise TgLinkException(
-                f"🔒 You do not have access to this Telegram chat/message. ERROR: {e}"
-            ) from e
-    else:
-        raise TgLinkException(
-            "🔒 Unable to access this Telegram message. Check that your configured session "
-            "belongs to an account that can access the chat/message, then try again."
-        )
+            last_err = e
+
+    raise TgLinkException(
+        f"🔒 You do not have access to this Telegram chat/message. ERROR: {last_err or 'Message not found or empty!'}"
+    )
 
 
 async def _rich_api(method, payload):
