@@ -61,11 +61,11 @@ class HypertgDownload(HypertgTransfer):
     KB = 1024
     # Telegram GetFile hard limit is 1 MiB per request; use the max from part 1.
     _MIN_CHUNK = 256 * KB
-    _DEFAULT_PIPELINE = 128
-    _MIN_PIPELINE = 16
-    _MAX_PIPELINE_MULT = 4
-    _LOW_WORKERS = 4
-    _HIGH_WORKERS = max(16, len(allowed_cpus()) * 3)
+    _DEFAULT_PIPELINE = 32
+    _MIN_PIPELINE = 8
+    _MAX_PIPELINE_MULT = 2
+    _LOW_WORKERS = 6
+    _HIGH_WORKERS = max(16, len(allowed_cpus()) * 4)
     _MAX_RETRIES = 4
 
     def __init__(self, obj):
@@ -266,9 +266,9 @@ class HypertgDownload(HypertgTransfer):
                     await sleep(1)
         return None
 
-    async def _pipeline_fetch(self, idx, location, start, end, fid, csz, fd):
-        cname = self.clients[idx].me.username
-        sess = await self._get_session(idx, fid.dc_id)
+    async def _pipeline_fetch(self, idx, location, start, end, fid, csz, fd, lane=0):
+        cname = getattr(self.clients[idx].me, 'username', None) or str(idx)
+        sess = await self._get_session(idx, fid.dc_id, lane=lane)
         loc = location
         first_off = start - (start % csz)
         first_trim = start - first_off
@@ -370,12 +370,12 @@ class HypertgDownload(HypertgTransfer):
                                 return s, off, b""
                             pipe_timeouts += 1
                             window = max(min_win, window - 1)
-                            if pipe_timeouts >= 3:
+                            if pipe_timeouts >= 6:
                                 bot_down = True
                                 return s, off, b""
                             await sleep(min(3, pipe_timeouts))
                             continue
-                        my_sess = await self._get_session(idx, dc_or_ref, force=True)
+                        my_sess = await self._get_session(idx, dc_or_ref, force=True, lane=lane)
                         sess = my_sess
                         await sleep(attempt + 1)
                         continue
@@ -398,7 +398,7 @@ class HypertgDownload(HypertgTransfer):
                 except (ConnectionError, OSError, TimeoutError):
                     pipe_timeouts += 1
                     window = max(min_win, window - 1)
-                    if pipe_timeouts >= 3:
+                    if pipe_timeouts >= 6:
                         bot_down = True
                         return s, off, b""
                     await sleep(min(3, pipe_timeouts))
@@ -679,20 +679,20 @@ class HypertgDownload(HypertgTransfer):
         )
 
         mode = getattr(self._listener, "transmission_mode", "bot")
-        bot_clients = {k: v for k, v in self.clients.items() if k > 0}
+        bot_clients = {k: v for k, v in self.clients.items() if k >= 0}
         user_clients = {k: v for k, v in self.clients.items() if k < 0}
 
         if mode == "bot":
-            use_clients = bot_clients
+            use_clients = bot_clients or self.clients
         elif mode == "user":
-            use_clients = user_clients
+            use_clients = user_clients or self.clients
         else:
             use_clients = self.clients
 
         if not use_clients:
             raise RuntimeError(f"HypertgDL no clients for mode {mode}")
 
-        use_count = min(self.num_parts, len(use_clients))
+        use_count = max(self.num_parts, len(use_clients))
 
         if mode == "both" and bot_clients and user_clients:
             n_bot = min(len(bot_clients), max(1, use_count // 2))
@@ -703,10 +703,11 @@ class HypertgDownload(HypertgTransfer):
             cidx = await _pick_clients(self.work_loads, use_clients, use_count)
 
         n_use = len(cidx)
-        # Small min_part so multi-client parallelism engages from the first MB.
+        target_parts = max(self.num_parts, n_use)
+        # Small min_part so multi-session parallelism engages from the first MB.
         min_part = max(self.chunk_size, 256 * self.KB)
         n_parts = (
-            min(n_use, max(1, self.file_size // min_part))
+            min(target_parts, max(1, self.file_size // min_part))
             if self.file_size >= min_part
             else 1
         )
@@ -744,6 +745,7 @@ class HypertgDownload(HypertgTransfer):
                             assigns[i],
                             fid_map[assigns[i]],
                             self.chunk_size,
+                            lane=i,
                         )
                     )
                 )
@@ -822,9 +824,9 @@ class HypertgDownload(HypertgTransfer):
                     )
                 except Exception as e:
                     LOGGER.warning(
-                        f"HypertgDL copy fail: {e} (from={message.chat.id} to={dump_chat})"
+                        f"HypertgDL copy to dump {dump_chat} failed ({e}); downloading directly from source chat {message.chat.id}"
                     )
-                    raise RuntimeError(f"Cannot copy to dump chat: {e}") from e
+                    dump_chat = None
             self.dump_chat = dump_chat or message.chat.id
             self.message = self.message or message
             self.media = self._media_of(self.message)

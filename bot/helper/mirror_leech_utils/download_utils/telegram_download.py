@@ -91,20 +91,20 @@ class TelegramDownloadHelper:
         self._hyper_dl = (
             Config.USE_HYPER
             and personal_mode not in ("telegram", "both")
-            and self._dump_chat
             and (
-                (tm in ("bot", "both") and len(TgClient.helper_bots) != 0)
-                or (
-                    tm in ("user", "both")
-                    and (len(TgClient.helper_users) != 0 or TgClient.user is not None)
-                )
+                len(TgClient.helper_bots) != 0
+                or len(TgClient.helper_users) != 0
+                or TgClient.user is not None
+                or TgClient.bot is not None
             )
         )
         self._hyper_dl_instance = None
 
     @property
     def speed(self):
-        return self._processed_bytes / (time() - self._start_time)
+        if self._start_time <= 1:
+            return 0
+        return self._processed_bytes / max(0.05, time() - self._start_time)
 
     @property
     def processed_bytes(self):

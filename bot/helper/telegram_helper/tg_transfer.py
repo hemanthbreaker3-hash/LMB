@@ -78,9 +78,9 @@ class MtprotoPool:
         ak = await Auth(client, dc_id, test_mode).create()
         return ak, True
 
-    async def get_session(self, client_key, dc_id, is_media=True):
+    async def get_session(self, client_key, dc_id, is_media=True, lane=0):
         ck = self._resolve_key(client_key)
-        cache_key = (ck, dc_id)
+        cache_key = (ck, dc_id, lane)
         s = self._sessions.get(cache_key)
         if s and s.is_started.is_set():
             return s
@@ -129,9 +129,9 @@ class MtprotoPool:
             self._sessions[cache_key] = s
         return s
 
-    async def drop_session(self, client_key, dc_id):
+    async def drop_session(self, client_key, dc_id, lane=0):
         ck = self._resolve_key(client_key)
-        cache_key = (ck, dc_id)
+        cache_key = (ck, dc_id, lane)
         s = self._sessions.pop(cache_key, None)
         lock = self._locks.get(cache_key)
         if lock is not None and not lock.locked():
@@ -203,10 +203,10 @@ class HypertgTransfer:
                 return i
         return None
 
-    async def _get_session(self, idx, dc_id, force=False):
+    async def _get_session(self, idx, dc_id, force=False, lane=0):
         if force:
-            await self._pool.drop_session(idx, dc_id)
-        return await self._pool.get_session(idx, dc_id, is_media=True)
+            await self._pool.drop_session(idx, dc_id, lane=lane)
+        return await self._pool.get_session(idx, dc_id, is_media=True, lane=lane)
 
     async def _warmup(self, indices, dc_id):
         async def _w(i):
