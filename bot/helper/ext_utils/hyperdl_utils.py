@@ -61,8 +61,8 @@ class HypertgDownload(HypertgTransfer):
     KB = 1024
     # Telegram GetFile hard limit is 1 MiB per request; use the max from part 1.
     _MIN_CHUNK = 256 * KB
-    _DEFAULT_PIPELINE = 16
-    _MIN_PIPELINE = 12
+    _DEFAULT_PIPELINE = 24
+    _MIN_PIPELINE = 8
     _MAX_PIPELINE_MULT = 1
     _LOW_WORKERS = 16
     _HIGH_WORKERS = max(16, len(allowed_cpus()) * 4)
@@ -85,8 +85,9 @@ class HypertgDownload(HypertgTransfer):
         base_pipe = max(
             Config.HYPER_PIPELINE or self._DEFAULT_PIPELINE, self._MIN_PIPELINE
         )
-        # 16 lanes x 16 pipeline = 256 MiB max in-flight (fits 512 MiB budget without mem_guard stalls).
-        self.pipeline_depth = max(min(base_pipe, 16), self._MIN_PIPELINE)
+        # Start with a moderately aggressive window; adapt downward on errors/FloodWait.
+        # Memory reservations protect the process from unbounded in-flight chunks.
+        self.pipeline_depth = max(min(base_pipe, 32), self._MIN_PIPELINE)
         self.message = None
         self.media = None
         self.dump_chat = None
