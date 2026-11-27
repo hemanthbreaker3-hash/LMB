@@ -184,11 +184,6 @@ class HypertgTransfer:
             for no, client in TgClient.helper_users.items():
                 self.clients[-no] = client
                 self.client_ids.append(-no)
-        personal_uc = getattr(obj, "_user_client", None)
-        if personal_uc and all(c is not personal_uc for c in self.clients.values()):
-            key = -999
-            self.clients[key] = personal_uc
-            self.client_ids.append(key)
         if TgClient.user and all(c is not TgClient.user for c in self.clients.values()):
             key = -(len(TgClient.helper_users) + 1)
             self.clients[key] = TgClient.user

@@ -34,8 +34,8 @@ os.environ.setdefault("CBGRAM_RUST_CORE", "1")
 os.environ.setdefault("CBGRAM_UVLOOP", "1")
 # High-scale defaults for 10k+ concurrent users (cbgram.pages.dev + cbcrypto Rust core).
 # Override via env if the VPS is small: lower CBGRAM_MAX_CONCURRENT / CBGRAM_WORKERS.
-os.environ.setdefault("CBGRAM_MAX_CONCURRENT", "1024")
-os.environ.setdefault("CBGRAM_WORKERS", "256")
+os.environ.setdefault("CBGRAM_MAX_CONCURRENT", "256")
+os.environ.setdefault("CBGRAM_WORKERS", "64")
 
 _DB_PARTITION_SALT = b"wzmlx_v3_db_partition_salt"
 
@@ -254,13 +254,6 @@ class TgClient:
         for huser in (cls.helper_users or {}).values():
             if cls.is_client_premium(huser):
                 return True
-        if user_id is not None:
-            try:
-                p_cli = cls.personal_users.get(int(user_id))
-                if p_cli is not None and cls.is_client_premium(p_cli):
-                    return True
-            except (TypeError, ValueError):
-                pass
         return False
 
     @classmethod
@@ -295,8 +288,8 @@ class TgClient:
             os.environ.get("CBGRAM_RUST_CORE", "1"),
             _cb_backend,
             os.environ.get("CBGRAM_UVLOOP", "1"),
-            os.environ.get("CBGRAM_MAX_CONCURRENT", "1024"),
-            os.environ.get("CBGRAM_WORKERS", "256"),
+            os.environ.get("CBGRAM_MAX_CONCURRENT", "256"),
+            os.environ.get("CBGRAM_WORKERS", "64"),
         )
         return client
 
@@ -318,9 +311,9 @@ class TgClient:
         # https://cbgram.pages.dev/ — Rust engine for AES + file transfer path.
         for param, value in {
             "max_concurrent_transmissions": max(
-                1, int(os.environ.get("CBGRAM_MAX_CONCURRENT", "1024"))
+                1, int(os.environ.get("CBGRAM_MAX_CONCURRENT", "256"))
             ),
-            "workers": max(32, int(os.environ.get("CBGRAM_WORKERS", "256"))),
+            "workers": max(16, int(os.environ.get("CBGRAM_WORKERS", "64"))),
             "sleep_threshold": kwargs.get("sleep_threshold", 30),
             "skip_updates": False,
             "auto_no_updates": True,

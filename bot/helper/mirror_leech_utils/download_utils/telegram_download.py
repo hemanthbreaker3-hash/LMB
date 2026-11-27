@@ -91,8 +91,8 @@ class TelegramDownloadHelper:
         self._dump_chat = (
             self._listener.up_dest if self._listener.is_leech else None
         ) or Config.LEECH_LOG_CHAT
-        personal_mode = self._listener.user_dict.get("TELEGRAM_SESSION_MODE", "disabled")
-        # Use HypertgDownload (16 parallel cbgram MtprotoPool DC lanes + cbcrypto AES-CTR)
+        self._access_client = None
+        # Use HypertgDownload (parallel cbgram MtprotoPool DC lanes + cbcrypto AES-CTR)
         # as primary for max multi-connection speed, with native cbgram download_media fallback.
         self._cb_native = False
         self._hyper_dl = (
@@ -197,6 +197,7 @@ class TelegramDownloadHelper:
         try:
             if dir_path := ospath.dirname(path):
                 await makedirs(dir_path, exist_ok=True)
+            download = None
             if self._hyper_dl:
                 try:
                     self._hyper_dl_instance = HypertgDownload(self)
@@ -224,27 +225,9 @@ class TelegramDownloadHelper:
                         )
                         return False
                     LOGGER.warning(f"Hyper download failed, using normal: {e}")
-                    if (self._listener.transmission_mode in ("user", "both") or (TgClient.user is not None and not getattr(self._listener, "bot_trans", False))) and self._user_client is not None:
-                        self.session = "user"
-                        try:
-                            user_message = await self._user_client.get_messages(
-                                chat_id=message.chat.id, message_ids=message.id
-                            )
-                            download = await user_message.download(
-                                file_name=path, progress=self._on_download_progress
-                            )
-                        except Exception:
-                            if self._listener.is_cancelled:
-                                return False
-                            download = await message.download(
-                                file_name=path, progress=self._on_download_progress
-                            )
-                    else:
-                        self.session = "bot"
-                        download = await message.download(
-                            file_name=path, progress=self._on_download_progress
-                        )
-            else:
+                    download = None
+
+            if download is None and not self._listener.is_cancelled:
                 # Native cbgram + cbcrypto Rust file-path download (https://cbgram.pages.dev/):
                 # Always pass a real file_name path (never in_memory=True) so cbcrypto
                 # handles MTProto sockets, pacing, AES-CTR decryption, and disk writes in Rust.
@@ -279,12 +262,23 @@ class TelegramDownloadHelper:
                             from ...ext_utils.bot_utils import parse_dest
                             dc_id, _ = parse_dest(self._dump_chat)
                             if isinstance(dc_id, int) and dc_id != message.chat.id:
-                                copied = await TgClient.bot.copy_message(
-                                    chat_id=dc_id,
-                                    from_chat_id=message.chat.id,
-                                    message_id=message.id,
-                                    disable_notification=True,
-                                )
+                                copied = None
+                                for copier in (TgClient.bot, self._user_client, self._access_client):
+                                    if copier is None:
+                                        continue
+                                    try:
+                                        await TgClient.ensure_peer(copier, dc_id, fallback_client=TgClient.bot)
+                                        await TgClient.ensure_peer(copier, message.chat.id, fallback_client=TgClient.bot)
+                                        copied = await copier.copy_message(
+                                            chat_id=dc_id,
+                                            from_chat_id=message.chat.id,
+                                            message_id=message.id,
+                                            disable_notification=True,
+                                        )
+                                        if copied:
+                                            break
+                                    except Exception:
+                                        copied = None
                                 if copied:
                                     self._listener.dump_chat = dc_id
                                     self._listener.dump_msg_id = copied.id
@@ -359,11 +353,33 @@ class TelegramDownloadHelper:
                             self._active_helper_client = None
                             TgClient.release_load(h_client)
 
-                if download is None and not self._listener.is_cancelled:
+                if download is None and not self._listener.is_cancelled and TgClient.bot is not None:
                     self.session = "bot"
-                    download = await message.download(
-                        file_name=path, progress=self._on_download_progress
-                    )
+                    bot_msg = None
+                    try:
+                        bot_msg = await TgClient.bot.get_messages(
+                            chat_id=message.chat.id, message_ids=message.id
+                        )
+                    except Exception:
+                        bot_msg = None
+                    if (bot_msg is None or getattr(bot_msg, "empty", False)) and getattr(self._listener, "dump_chat", None) and getattr(self._listener, "dump_msg_id", None):
+                        try:
+                            bot_msg = await TgClient.bot.get_messages(
+                                chat_id=self._listener.dump_chat, message_ids=self._listener.dump_msg_id
+                            )
+                        except Exception:
+                            bot_msg = None
+                    if bot_msg is not None and not getattr(bot_msg, "empty", False):
+                        download = await TgClient.bot.download_media(
+                            bot_msg,
+                            file_name=path,
+                            progress=self._on_download_progress,
+                        )
+                    else:
+                        LOGGER.error(
+                            "Bot and USER_SESSION_STRING cannot access source chat %s or dump_chat; personal user session is restricted to channel access only.",
+                            getattr(message.chat, "id", "?"),
+                        )
             if self._listener.is_cancelled:
                 return False
             return download is not None
@@ -529,23 +545,10 @@ class TelegramDownloadHelper:
     async def add_download(self, message, path, session):
         self.session = session
         await TgClient.ensure_user_client()
-        personal_sess = self._listener.user_dict.get("TELEGRAM_SESSION_STRING")
-        session_mode = self._listener.user_dict.get(
-            "TELEGRAM_SESSION_MODE", "both" if personal_sess else "disabled"
-        )
-        if personal_sess and session_mode in ("telegram", "both"):
-            self._user_client = await TgClient.get_personal_user(
-                self._listener.user_id,
-                personal_sess,
-            )
-            if self._user_client:
-                self.session = "user"
-            else:
-                LOGGER.warning(
-                    "Personal Telegram session unavailable, falling back to bot/helper session"
-                )
-        if self._user_client is None and TgClient.user is not None:
-            self._user_client = TgClient.user
+        self._access_client = getattr(message, "_client", None)
+        # Always use Bot Settings USER_SESSION_STRING (TgClient.user) for downloads;
+        # Misc Settings personal session is strictly for channel access / reference resolution.
+        self._user_client = TgClient.user
         if not self.session:
             if self._hyper_dl:
                 self.session = "hbots"

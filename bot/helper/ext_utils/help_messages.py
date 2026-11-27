@@ -341,7 +341,6 @@ def get_bot_commands():
         "QbLeech": "[magnet/torrent] Leech using qBittorrent",
         "Gallerydl": "[link] Mirror supported sites via gallery-dl",
     "GallerydlLeech": "[link] Leech supported sites via gallery-dl",
-    "NzbSearch": "[query] Search NZBHydra2",
     "YtdlLeech": "[link] Leech YouTube and supported websites",
         "Clone": "[link] Copy files/folders to Google Drive or Rclone",
         "UserSet": "Manage personal user settings",

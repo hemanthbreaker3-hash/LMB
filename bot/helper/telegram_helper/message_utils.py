@@ -404,7 +404,8 @@ async def get_tg_link_message(link, range_mode="normal", user_id=None, user_dict
             uid = int(user_id)
             data = user_dict if isinstance(user_dict, dict) else user_data.get(uid, {})
             session_string = data.get("TELEGRAM_SESSION_STRING") if data else None
-            if session_string:
+            session_mode = data.get("TELEGRAM_SESSION_MODE", "both") if data else "disabled"
+            if session_string and session_mode != "disabled":
                 personal_user = await TgClient.get_personal_user(uid, session_string)
                 if personal_user:
                     LOGGER.info(f"Using personal Telegram session for user {uid} to resolve {link}")

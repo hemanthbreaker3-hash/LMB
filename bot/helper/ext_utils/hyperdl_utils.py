@@ -40,6 +40,7 @@ from pyrogram.session import Session
 from ... import LOGGER
 from ...core.config_manager import Config
 from ...core.cpu import allowed_cpus
+from .flood_guard import note_floodwait, wait_if_needed
 from .mem_guard import budget
 from ...core.tg_client import TgClient
 from ..telegram_helper.tg_transfer import MB, HypertgTransfer, media_of
@@ -61,11 +62,11 @@ class HypertgDownload(HypertgTransfer):
     KB = 1024
     # Telegram GetFile hard limit is 1 MiB per request; use the max from part 1.
     _MIN_CHUNK = 256 * KB
-    _DEFAULT_PIPELINE = 24
-    _MIN_PIPELINE = 8
+    _DEFAULT_PIPELINE = 12
+    _MIN_PIPELINE = 4
     _MAX_PIPELINE_MULT = 1
-    _LOW_WORKERS = 16
-    _HIGH_WORKERS = max(16, len(allowed_cpus()) * 4)
+    _LOW_WORKERS = 4
+    _HIGH_WORKERS = min(16, max(4, len(allowed_cpus()) * 2))
     _MAX_RETRIES = 4
 
     def __init__(self, obj):
@@ -87,7 +88,7 @@ class HypertgDownload(HypertgTransfer):
         )
         # Start with a moderately aggressive window; adapt downward on errors/FloodWait.
         # Memory reservations protect the process from unbounded in-flight chunks.
-        self.pipeline_depth = max(min(base_pipe, 32), self._MIN_PIPELINE)
+        self.pipeline_depth = max(min(base_pipe, 16), self._MIN_PIPELINE)
         self.message = None
         self.media = None
         self.dump_chat = None
@@ -117,24 +118,44 @@ class HypertgDownload(HypertgTransfer):
             self._ref_put(idx, fid)
             return fid
         LOGGER.warning(
-            "HypertgDL ref ci=%d: client can't access dump_chat=%s, trying bots",
+            "HypertgDL ref ci=%d: client can't access dump_chat=%s, trying other clients",
             idx,
             self.dump_chat,
         )
         for cix, cl in self.clients.items():
-            if cix >= 0:  # include TgClient.bot (0) and helper bots (>0)
-                fid = await self._fetch_ref_try(cl)
-                if fid:
-                    self._ref_put(idx, fid)
-                    return fid
+            if cl is client:
+                continue
+            fid = await self._fetch_ref_try(cl)
+            if fid:
+                self._ref_put(idx, fid)
+                return fid
+        # If download clients cannot resolve the source chat directly, use the
+        # resolving client (e.g. personal user session) ONLY to refresh the file reference.
+        src_client = getattr(self.message, "_client", None)
+        if src_client is not None and all(cl is not src_client for cl in self.clients.values()):
+            fid = await self._fetch_ref_try(src_client)
+            if fid:
+                self._ref_put(idx, fid)
+                return fid
+        # Final fallback: use the FileId already decoded from self.message
+        if self.media is not None:
+            fid_str = self.media if isinstance(self.media, str) else getattr(self.media, "file_id", None)
+            if fid_str:
+                fid = FileId.decode(fid_str)
+                self._ref_put(idx, fid)
+                return fid
         raise ValueError(
             f"no file_id in msg {self.message.id} in dump_chat={self.dump_chat} (all clients failed)"
         )
 
     async def _fetch_ref_try(self, client):
         try:
-            msg = await client.get_messages(self.dump_chat, self.message.id)
-            if msg is None:
+            try:
+                msg = await client.get_messages(self.dump_chat, self.message.id)
+            except Exception:
+                await TgClient.ensure_peer(client, self.dump_chat, fallback_client=TgClient.bot)
+                msg = await client.get_messages(self.dump_chat, self.message.id)
+            if msg is None or getattr(msg, "empty", False):
                 LOGGER.warning(
                     "HypertgDL _fetch_ref_try: msg %s not found in %s",
                     self.message.id,
@@ -339,8 +360,9 @@ class HypertgDownload(HypertgTransfer):
                 return s, off, b""
             my_sess = sess
             my_loc = loc
-            max_attempts = 1
+            max_attempts = 5
             for attempt in range(max_attempts):
+                await wait_if_needed(f"dl_{idx}")
                 try:
                     cdn = self._cdn_info.get(idx)
                     if cdn:
@@ -386,15 +408,16 @@ class HypertgDownload(HypertgTransfer):
                 except (FloodWait, FloodPremiumWait) as e:
                     flood_count += 1
                     val = e.value if hasattr(e, "value") else 5
-                    if val > 10 or flood_count >= 3:
-                        window = max(min_win, window - max(1, window // 4))
+                    if val > 5 or flood_count >= 2:
+                        window = max(min_win, window - max(1, window // 3))
                         ok_count = 0
                         flood_count = 0
                         LOGGER.warning(
                             f"HypertgDL flood window={window} "
                             f"val={val}s client={cname} off={off}"
                         )
-                    await sleep(val + 1)
+                    await note_floodwait(val, account=f"dl_{idx}")
+                    await sleep(min(val + 1, 45))
                 except CancelledError:
                     raise
                 except (ConnectionError, OSError, TimeoutError):
@@ -714,7 +737,7 @@ class HypertgDownload(HypertgTransfer):
             cidx = await _pick_clients(self.work_loads, use_clients, use_count)
 
         n_use = len(cidx)
-        target_parts = max(self.num_parts, n_use)
+        target_parts = Config.HYPER_THREADS or min(self._HIGH_WORKERS, max(4, n_use * 4))
         # Small min_part so multi-session parallelism engages from the first MB.
         min_part = max(self.chunk_size, 256 * self.KB)
         n_parts = (
@@ -807,12 +830,32 @@ class HypertgDownload(HypertgTransfer):
                 cidx=cidx,
             )
 
+            if all_failed_offsets:
+                raise RuntimeError(
+                    f"HypertgDL incomplete download: {len(all_failed_offsets)} chunks failed"
+                )
+
             return final
         except FloodWait:
+            if os.path.exists(final):
+                try:
+                    os.remove(final)
+                except OSError:
+                    pass
             raise
         except (CancelledError, StopTransmission):
+            if os.path.exists(final):
+                try:
+                    os.remove(final)
+                except OSError:
+                    pass
             return None
         except Exception as e:
+            if os.path.exists(final):
+                try:
+                    os.remove(final)
+                except OSError:
+                    pass
             LOGGER.error(f"HypertgDL: {e}")
             raise
         finally:
@@ -844,16 +887,30 @@ class HypertgDownload(HypertgTransfer):
             if dump_chat and dump_chat == message.chat.id:
                 dump_chat = None
             if dump_chat:
-                try:
-                    self.message = await TgClient.bot.copy_message(
-                        chat_id=dump_chat,
-                        from_chat_id=message.chat.id,
-                        message_id=message.id,
-                        disable_notification=True,
-                    )
-                except Exception as e:
+                copied = None
+                last_err = None
+                copy_candidates = []
+                for c in (TgClient.bot, TgClient.user, getattr(message, "_client", None)):
+                    if c is not None and all(x is not c for x in copy_candidates):
+                        copy_candidates.append(c)
+                for copier in copy_candidates:
+                    try:
+                        await TgClient.ensure_peer(copier, dump_chat, fallback_client=TgClient.bot)
+                        await TgClient.ensure_peer(copier, message.chat.id, fallback_client=TgClient.bot)
+                        copied = await copier.copy_message(
+                            chat_id=dump_chat,
+                            from_chat_id=message.chat.id,
+                            message_id=message.id,
+                            disable_notification=True,
+                        )
+                        if copied:
+                            self.message = copied
+                            break
+                    except Exception as e:
+                        last_err = e
+                if not copied:
                     LOGGER.warning(
-                        f"HypertgDL copy to dump {dump_chat} failed ({e}); downloading directly from source chat {message.chat.id}"
+                        f"HypertgDL copy to dump {dump_chat} failed ({last_err}); downloading directly from source chat {message.chat.id}"
                     )
                     dump_chat = None
             self.dump_chat = dump_chat or message.chat.id

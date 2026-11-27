@@ -207,7 +207,7 @@ async def restart_sessions_confirm(_, query):
     if data[1] == "confirm":
         reply_to = message.reply_to_message or message
         restart_message = await send_message(
-            reply_to, "<b>🔄 Restarting user sessions...</b>\\n\\nPlease wait."
+            reply_to, "<b>🔄 Restarting user sessions...</b>\n\nPlease wait."
         )
         await delete_message(message)
         try:
@@ -224,7 +224,7 @@ async def restart_sessions_confirm(_, query):
             LOGGER.exception("User session restart failed")
             await edit_message(
                 restart_message,
-                "<b>❌ User session restart failed.</b>\\n\\nCheck the bot logs for details.",
+                "<b>❌ User session restart failed.</b>\n\nCheck the bot logs for details.",
             )
     else:
         await delete_message(message)

@@ -22,7 +22,6 @@ class BotCommands:
         "YtdlLeech": ["ytdlleech", "yl"],
         "Gallerydl": ["gallerydl", "gdl"],
         "GallerydlLeech": ["gallerydlleech", "gdlleech"],
-        "NzbSearch": "nzbsearch",
         "NzbLeech": ["nzbleech", "nl"],
         "SeedrLink": ["seedrlink", "slink", "srlink"],
         "Clone": ["clone", "cl"],

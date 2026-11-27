@@ -3390,9 +3390,8 @@ async def _edit_user_settings_impl(client, query):
 <blockquote>• <b>Status:</b> {status}
 • <b>Mode:</b> <b>{current}</b>
 
-<b>Telegram Links</b> = use this session for Telegram-link downloads.
-<b>Upload</b> = use this session for Telegram uploads.
-<b>Both</b> = use it for both.
+<b>Channel Access</b> = use this session ONLY to resolve/access private source channels and retrieve message references.
+All downloads and uploads always use the Bot Settings configured user/bot sessions.
 The session string is a private login credential and is never shown back.</blockquote>""",
             buttons.build_menu(2),
         )

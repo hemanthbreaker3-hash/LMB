@@ -1,6 +1,7 @@
 from asyncio import gather, get_event_loop, sleep, wait_for
 from datetime import datetime
 from importlib import reload as reload_module
+import sys
 from os import execl as osexecl
 from sys import executable
 
@@ -146,7 +147,10 @@ async def restart_notification():
     else:
         chat_id, msg_id = 0, 0
 
-    now = datetime.now(timezone(Config.TIMEZONE))
+    try:
+        now = datetime.now(timezone(Config.TIMEZONE))
+    except Exception:
+        now = datetime.now()
 
     if Config.DATABASE_URL and (Config.INC_TASK_NOTIFY or Config.INC_TASK_RESUME):
         if notifier_dict := await database.get_incomplete_tasks():
@@ -158,7 +162,7 @@ async def restart_notification():
             finally:
                 await database.drop_incomplete_tasks()
 
-    if is_restarted:
+    if is_restarted and chat_id and msg_id:
         try:
             await TgClient.bot.edit_message_text(
                 chat_id=chat_id,
@@ -275,7 +279,7 @@ async def confirm_restart(_, query):
                 await _runtime_reload()
                 result_text = (
                     "<b>✅ Soft Reload Completed</b>\n\n"
-                    + _restart_header(datetime.now(timezone(Config.TIMEZONE)))
+                    + _restart_header(datetime.now(timezone(Config.TIMEZONE)) if Config.TIMEZONE else datetime.now())
                 )
                 await notify_owner_and_sudos("Soft Reload Completed")
             except Exception as e:
@@ -312,13 +316,13 @@ async def confirm_restart(_, query):
             except Exception:
                 LOGGER.exception("Restart: database flush/close failed; continuing safely")
 
-            if qb := intervals["qb"]:
+            if qb := intervals.get("qb"):
                 qb.cancel()
-            if jd := intervals["jd"]:
+            if jd := intervals.get("jd"):
                 jd.cancel()
-            if nzb := intervals["nzb"]:
+            if nzb := intervals.get("nzb"):
                 nzb.cancel()
-            if st := intervals["status"]:
+            if st := intervals.get("status"):
                 for intvl in list(st.values()):
                     intvl.cancel()
 
@@ -423,6 +427,8 @@ async def confirm_restart(_, query):
             LOGGER.warning(
                 "Restart: replacing supervised process with %s -m bot", executable
             )
+            sys.stdout.flush()
+            sys.stderr.flush()
             osexecl(executable, executable, "-m", "bot")
     else:
         await delete_message(message, reply_to)
