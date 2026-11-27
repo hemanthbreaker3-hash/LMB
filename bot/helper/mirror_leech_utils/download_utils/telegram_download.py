@@ -1,5 +1,6 @@
 import os
 import re
+from collections import deque
 from asyncio import Lock, sleep
 from os import path as ospath
 from time import time
@@ -79,7 +80,9 @@ def clean_caption_filename(caption: str, fallback_filename: str) -> str:
 class TelegramDownloadHelper:
     def __init__(self, listener):
         self._processed_bytes = 0
-        self._start_time = 1
+        self._start_time = 0.0
+        self._transfer_start = 0.0
+        self._speed_samples = deque(maxlen=24)
         self._listener = listener
         self._id = ""
         self.session = ""
@@ -89,19 +92,11 @@ class TelegramDownloadHelper:
             self._listener.up_dest if self._listener.is_leech else None
         ) or Config.LEECH_LOG_CHAT
         personal_mode = self._listener.user_dict.get("TELEGRAM_SESSION_MODE", "disabled")
-        rust_core_on = os.environ.get("CBGRAM_RUST_CORE", "1").strip().lower() not in (
-            "0",
-            "false",
-            "no",
-            "off",
-        )
-        self._cb_native = rust_core_on
-        # Use native cbgram + cbcrypto Rust download_media(file_name=path) by default.
-        # Only fall back to legacy pure-Python HypertgDownload if CBGRAM_RUST_CORE=0.
+        # Use HypertgDownload (16 parallel cbgram MtprotoPool DC lanes + cbcrypto AES-CTR)
+        # as primary for max multi-connection speed, with native cbgram download_media fallback.
+        self._cb_native = False
         self._hyper_dl = (
-            not rust_core_on
-            and Config.USE_HYPER
-            and personal_mode not in ("telegram", "both")
+            Config.USE_HYPER
             and (
                 TgClient.user is not None
                 or TgClient.bot is not None
@@ -112,11 +107,31 @@ class TelegramDownloadHelper:
         self._hyper_dl_instance = None
         self._active_helper_client = None
 
+    def _record_bytes(self, delta: int):
+        now = time()
+        if self._transfer_start <= 0 and delta > 0:
+            self._transfer_start = now
+            self._speed_samples.clear()
+            self._speed_samples.append((now, 0))
+        self._processed_bytes += delta
+        if delta > 0:
+            self._speed_samples.append((now, self._processed_bytes))
+
     @property
     def speed(self):
-        if self._start_time <= 1:
+        if self._processed_bytes <= 0 or self._transfer_start <= 0:
             return 0
-        return self._processed_bytes / max(0.05, time() - self._start_time)
+        now = time()
+        # Keep a ~3s sliding window so the very first tick shows real burst speed
+        # without being dragged down by pre-transfer auth/session setup time.
+        while len(self._speed_samples) > 2 and (now - self._speed_samples[0][0]) > 3.0:
+            self._speed_samples.popleft()
+        if len(self._speed_samples) >= 2:
+            t0, b0 = self._speed_samples[0]
+            dt = now - t0
+            if dt >= 0.15 and self._processed_bytes > b0:
+                return (self._processed_bytes - b0) / dt
+        return self._processed_bytes / max(0.05, now - self._transfer_start)
 
     @property
     def processed_bytes(self):
@@ -157,7 +172,14 @@ class TelegramDownloadHelper:
             elif TgClient.bot is not None:
                 TgClient.bot.stop_transmission()
             return
+        now = time()
+        if self._transfer_start <= 0 and current > 0:
+            self._transfer_start = now
+            self._speed_samples.clear()
+            self._speed_samples.append((now, 0))
         self._processed_bytes = current
+        if current > 0:
+            self._speed_samples.append((now, current))
 
     async def _on_download_error(self, error):
         async with global_lock:

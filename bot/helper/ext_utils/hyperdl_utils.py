@@ -61,10 +61,10 @@ class HypertgDownload(HypertgTransfer):
     KB = 1024
     # Telegram GetFile hard limit is 1 MiB per request; use the max from part 1.
     _MIN_CHUNK = 256 * KB
-    _DEFAULT_PIPELINE = 32
+    _DEFAULT_PIPELINE = 16
     _MIN_PIPELINE = 12
     _MAX_PIPELINE_MULT = 1
-    _LOW_WORKERS = 12
+    _LOW_WORKERS = 16
     _HIGH_WORKERS = max(16, len(allowed_cpus()) * 4)
     _MAX_RETRIES = 4
 
@@ -85,8 +85,8 @@ class HypertgDownload(HypertgTransfer):
         base_pipe = max(
             Config.HYPER_PIPELINE or self._DEFAULT_PIPELINE, self._MIN_PIPELINE
         )
-        # Keep deep pipeline per part so the first range is already saturated.
-        self.pipeline_depth = max(min(base_pipe, 32), self._MIN_PIPELINE)
+        # 16 lanes x 16 pipeline = 256 MiB max in-flight (fits 512 MiB budget without mem_guard stalls).
+        self.pipeline_depth = max(min(base_pipe, 16), self._MIN_PIPELINE)
         self.message = None
         self.media = None
         self.dump_chat = None
@@ -319,7 +319,10 @@ class HypertgDownload(HypertgTransfer):
                 await self._pwrite(fd, chunk, roff)
             else:
                 await self._pwrite(fd, chunk, roff)
-            self._obj._processed_bytes += len(chunk)
+            if hasattr(self._obj, "_record_bytes"):
+                self._obj._record_bytes(len(chunk))
+            else:
+                self._obj._processed_bytes += len(chunk)
 
         async def _req(off, s):
             nonlocal \
@@ -726,17 +729,26 @@ class HypertgDownload(HypertgTransfer):
         fid_map = {}
         self._tasks = []
         try:
-            for ci in list(unique_clients):
+            async def _fetch_one(ci):
                 try:
-                    fid_map[ci] = await self._fetch_ref(ci, self.clients[ci])
-                except Exception:
-                    if ci < 0 and bot_clients:
-                        fallback_ci = next(iter(bot_clients))
-                        fid_map[fallback_ci] = await self._fetch_ref(fallback_ci, self.clients[fallback_ci])
-                        assigns = [fallback_ci if a == ci else a for a in assigns]
-                        unique_clients = set(assigns)
-                    else:
-                        raise
+                    return ci, await self._fetch_ref(ci, self.clients[ci]), None
+                except Exception as exc:
+                    return ci, None, exc
+
+            fetch_res = await gather(*[_fetch_one(ci) for ci in list(unique_clients)])
+            for ci, fid_val, exc in fetch_res:
+                if exc is None and fid_val is not None:
+                    fid_map[ci] = fid_val
+                elif ci < 0 and bot_clients:
+                    fallback_ci = next(iter(bot_clients))
+                    if fallback_ci not in fid_map:
+                        fid_map[fallback_ci] = await self._fetch_ref(
+                            fallback_ci, self.clients[fallback_ci]
+                        )
+                    assigns = [fallback_ci if a == ci else a for a in assigns]
+                    unique_clients = set(assigns)
+                else:
+                    raise exc
 
             first_fid = fid_map[assigns[0]]
             try:

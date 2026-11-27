@@ -152,6 +152,18 @@ class MtprotoPool:
         self._locks.clear()
 
 
+_SHARED_POOLS = {}
+
+
+async def close_shared_pools():
+    for pool in list(_SHARED_POOLS.values()):
+        try:
+            await pool.stop()
+        except Exception:
+            pass
+    _SHARED_POOLS.clear()
+
+
 class HypertgTransfer:
     def __init__(self, obj):
         self._obj = obj
@@ -172,6 +184,11 @@ class HypertgTransfer:
             for no, client in TgClient.helper_users.items():
                 self.clients[-no] = client
                 self.client_ids.append(-no)
+        personal_uc = getattr(obj, "_user_client", None)
+        if personal_uc and all(c is not personal_uc for c in self.clients.values()):
+            key = -999
+            self.clients[key] = personal_uc
+            self.client_ids.append(key)
         if TgClient.user and all(c is not TgClient.user for c in self.clients.values()):
             key = -(len(TgClient.helper_users) + 1)
             self.clients[key] = TgClient.user
@@ -182,7 +199,12 @@ class HypertgTransfer:
         self.num_clients = len(self.clients)
         for i in self.client_ids:
             self.work_loads.setdefault(i, 0)
-        self._pool = MtprotoPool(self.clients)
+        pool_sig = tuple((k, id(v)) for k, v in sorted(self.clients.items()))
+        pool = _SHARED_POOLS.get(pool_sig)
+        if pool is None:
+            pool = MtprotoPool(self.clients)
+            _SHARED_POOLS[pool_sig] = pool
+        self._pool = pool
         self._cancel = Event()
         self._tasks = []
         LOGGER.info(
@@ -219,7 +241,9 @@ class HypertgTransfer:
         await gather(*[_w(item) for item in indices])
 
     async def _close_all(self):
-        await self._pool.stop()
+        # Keep shared MtprotoPool sessions warm across downloads so the next
+        # download starts with zero Auth/ExportAuthorization delay.
+        return None
 
     @staticmethod
     def _location(fid):

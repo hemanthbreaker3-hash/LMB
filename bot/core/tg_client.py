@@ -859,6 +859,9 @@ class TgClient:
 
     @classmethod
     async def stop(cls):
+        from ..helper.telegram_helper.tg_transfer import close_shared_pools
+        with suppress(Exception):
+            await close_shared_pools()
         async with cls._lock:
             clients = []
             for c in [cls.bot, cls.user, *cls.helper_bots.values(), *cls.helper_users.values(), *cls.stream_bots.values(), *cls.personal_users.values()]:
@@ -889,6 +892,9 @@ class TgClient:
 
     @classmethod
     async def reload(cls):
+        from ..helper.telegram_helper.tg_transfer import close_shared_pools
+        with suppress(Exception):
+            await close_shared_pools()
         async with cls._lock:
             for c in [cls.bot, cls.user, *cls.helper_bots.values(), *cls.helper_users.values(), *cls.stream_bots.values()]:
                 if c and hasattr(c, "_close_fast_upload_sessions"):
