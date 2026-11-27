@@ -22,6 +22,7 @@ from .gd_search import gdrive_search, select_type
 from .help import arg_usage, bot_help
 from .images import picture_add, pictures, pics_callback
 from .stream import stream_links
+from .join import join_chat
 from .category_select import change_category, confirm_category, confirm_dump_chat
 from .broadcast import broadcast
 from .mirror_leech import (
@@ -81,6 +82,7 @@ from ..helper.ext_utils.track_manager import tm_callback
 
 __all__ = [
     "tm_callback",
+    "join_chat",
     "mention_all",
     "gen_session_cmd",
     "tmv_command",

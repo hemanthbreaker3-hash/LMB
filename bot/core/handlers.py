@@ -482,6 +482,13 @@ async def add_handlers():
     )
     TgClient.bot.add_handler(
         MessageHandler(
+            join_chat,
+            filters=command(BotCommands.JoinCommand, case_sensitive=False)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
             picture_add,
             filters=command(BotCommands.AddImageCommand, case_sensitive=False)
             & CustomFilters.authorized,

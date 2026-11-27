@@ -363,6 +363,7 @@ def get_bot_commands():
         "Verify": "Request a verification link; admins can toggle verification and set validity",
         "Shorteners": "[SUDO] Add, replace, and delete verification shorteners",
         "Mention": "[Authorized group admin] Pin a replied message and mention all members",
+        "Join": "[invite/channel link] Join channel/group using Bot Settings user session",
     }
 
     commands = static_commands.copy()

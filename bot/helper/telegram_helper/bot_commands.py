@@ -77,6 +77,7 @@ class BotCommands:
         "GenSession": ["gensession", "gs"],
         "Tmv": "tmv",
         "Tstatus": ["tstatus", "ts"],
+        "Join": "join",
     }
 
     @classmethod

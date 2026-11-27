@@ -475,6 +475,7 @@ async def _runtime_reload():
         "bot.modules.gallery_dl",
         "bot.modules.leech_del",
         "bot.modules.nzb_search",
+        "bot.modules.join",
     ]
 
     for mod_name in modules_to_reload:
