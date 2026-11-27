@@ -82,21 +82,21 @@ class TelegramDownloadHelper:
         self._listener = listener
         self._id = ""
         self.session = ""
-        self._user_client = None
+        self._user_client = TgClient.user
         tm = self._listener.transmission_mode
         self._dump_chat = (
             self._listener.up_dest if self._listener.is_leech else None
         ) or Config.LEECH_LOG_CHAT
         personal_mode = self._listener.user_dict.get("TELEGRAM_SESSION_MODE", "disabled")
+        has_helpers = (
+            (tm in ("bot", "both") and len(TgClient.helper_bots) != 0)
+            or (tm in ("user", "both") and len(TgClient.helper_users) != 0)
+        )
         self._hyper_dl = (
             Config.USE_HYPER
             and personal_mode not in ("telegram", "both")
-            and (
-                len(TgClient.helper_bots) != 0
-                or len(TgClient.helper_users) != 0
-                or TgClient.user is not None
-                or TgClient.bot is not None
-            )
+            and bool(self._dump_chat)
+            and has_helpers
         )
         self._hyper_dl_instance = None
 
@@ -184,7 +184,7 @@ class TelegramDownloadHelper:
                         )
                         return False
                     LOGGER.warning(f"Hyper download failed, using normal: {e}")
-                    if self._listener.transmission_mode in ("user", "both"):
+                    if (self._listener.transmission_mode in ("user", "both") or (TgClient.user is not None and not getattr(self._listener, "bot_trans", False))) and self._user_client is not None:
                         self.session = "user"
                         try:
                             user_message = await self._user_client.get_messages(
@@ -205,9 +205,62 @@ class TelegramDownloadHelper:
                             file_name=path, progress=self._on_download_progress
                         )
             else:
-                download = await message.download(
-                    file_name=path, progress=self._on_download_progress
+                use_user = (
+                    self._user_client is not None
+                    and not getattr(self._listener, "bot_trans", False)
                 )
+                download = None
+                if use_user:
+                    self.session = "user"
+                    try:
+                        user_msg = None
+                        try:
+                            await TgClient.ensure_peer(
+                                self._user_client, message.chat.id, fallback_client=TgClient.bot
+                            )
+                            user_msg = await self._user_client.get_messages(
+                                chat_id=message.chat.id, message_ids=message.id
+                            )
+                        except Exception:
+                            user_msg = None
+
+                        if (user_msg is None or getattr(user_msg, "empty", False)) and self._dump_chat:
+                            from ...ext_utils.bot_utils import parse_dest
+                            dc_id, _ = parse_dest(self._dump_chat)
+                            if isinstance(dc_id, int) and dc_id != message.chat.id:
+                                copied = await TgClient.bot.copy_message(
+                                    chat_id=dc_id,
+                                    from_chat_id=message.chat.id,
+                                    message_id=message.id,
+                                    disable_notification=True,
+                                )
+                                if copied:
+                                    self._listener.dump_chat = dc_id
+                                    self._listener.dump_msg_id = copied.id
+                                    await TgClient.ensure_peer(
+                                        self._user_client, dc_id, fallback_client=TgClient.bot
+                                    )
+                                    user_msg = await self._user_client.get_messages(
+                                        chat_id=dc_id, message_ids=copied.id
+                                    )
+
+                        if user_msg is not None and not getattr(user_msg, "empty", False):
+                            download = await self._user_client.download_media(
+                                user_msg,
+                                file_name=path,
+                                progress=self._on_download_progress,
+                            )
+                    except Exception as u_err:
+                        if self._listener.is_cancelled:
+                            return False
+                        LOGGER.warning(f"User session cbgram download_media failed ({u_err}); falling back to bot")
+                        download = None
+
+                if download is None and not self._listener.is_cancelled:
+                    self.session = "bot"
+                    download = await message.download(
+                        file_name=path, progress=self._on_download_progress
+                    )
             if self._listener.is_cancelled:
                 return False
             return download is not None

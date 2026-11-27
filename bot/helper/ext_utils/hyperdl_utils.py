@@ -61,10 +61,10 @@ class HypertgDownload(HypertgTransfer):
     KB = 1024
     # Telegram GetFile hard limit is 1 MiB per request; use the max from part 1.
     _MIN_CHUNK = 256 * KB
-    _DEFAULT_PIPELINE = 32
-    _MIN_PIPELINE = 8
+    _DEFAULT_PIPELINE = 48
+    _MIN_PIPELINE = 12
     _MAX_PIPELINE_MULT = 2
-    _LOW_WORKERS = 6
+    _LOW_WORKERS = 8
     _HIGH_WORKERS = max(16, len(allowed_cpus()) * 4)
     _MAX_RETRIES = 4
 
@@ -123,7 +123,7 @@ class HypertgDownload(HypertgTransfer):
             self.dump_chat,
         )
         for cix, cl in self.clients.items():
-            if cix > 0:  # bot clients only
+            if cix >= 0:  # include TgClient.bot (0) and helper bots (>0)
                 fid = await self._fetch_ref_try(cl)
                 if fid:
                     self._ref_put(idx, fid)
@@ -512,12 +512,12 @@ class HypertgDownload(HypertgTransfer):
                 )
         return failed_offsets
 
-    async def _part(self, start, end, final_path, ci, fid, csz):
-        cname = self.clients[ci].me.username
+    async def _part(self, start, end, final_path, ci, fid, csz, lane=0):
+        cname = getattr(self.clients[ci].me, "username", None) or str(ci)
         fd = await to_thread(os.open, final_path, os.O_WRONLY)
         try:
             failed_offsets = await self._pipeline_fetch(
-                ci, self._location(fid), start, end, fid, csz, fd
+                ci, self._location(fid), start, end, fid, csz, fd, lane=lane
             )
         except Exception as e:
             first_off = start - (start % csz)
@@ -679,10 +679,19 @@ class HypertgDownload(HypertgTransfer):
         )
 
         mode = getattr(self._listener, "transmission_mode", "bot")
+        bot_trans = bool(getattr(self._listener, "bot_trans", False))
         bot_clients = {k: v for k, v in self.clients.items() if k >= 0}
         user_clients = {k: v for k, v in self.clients.items() if k < 0}
 
-        if mode == "bot":
+        # Always prioritize USER_SESSION_STRING (user_clients) for Telegram downloads
+        # whenever configured in Bot Settings (unless -bt was explicitly forced),
+        # because Telegram caps bot-token GetFile bandwidth far lower than user sessions.
+        if not bot_trans and user_clients:
+            if mode == "both" and bot_clients:
+                use_clients = self.clients
+            else:
+                use_clients = user_clients
+        elif mode == "bot":
             use_clients = bot_clients or self.clients
         elif mode == "user":
             use_clients = user_clients or self.clients
@@ -719,8 +728,17 @@ class HypertgDownload(HypertgTransfer):
         fid_map = {}
         self._tasks = []
         try:
-            for ci in unique_clients:
-                fid_map[ci] = await self._fetch_ref(ci, self.clients[ci])
+            for ci in list(unique_clients):
+                try:
+                    fid_map[ci] = await self._fetch_ref(ci, self.clients[ci])
+                except Exception:
+                    if ci < 0 and bot_clients:
+                        fallback_ci = next(iter(bot_clients))
+                        fid_map[fallback_ci] = await self._fetch_ref(fallback_ci, self.clients[fallback_ci])
+                        assigns = [fallback_ci if a == ci else a for a in assigns]
+                        unique_clients = set(assigns)
+                    else:
+                        raise
 
             first_fid = fid_map[assigns[0]]
             try:
