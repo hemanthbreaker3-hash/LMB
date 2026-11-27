@@ -183,8 +183,8 @@ for key in sorted(cfg_keys | extra_keys):
 
 values.setdefault('CBGRAM_RUST_CORE', '1')
 values.setdefault('CBGRAM_UVLOOP', '1')
-values.setdefault('CBGRAM_MAX_CONCURRENT', '512')
-values.setdefault('CBGRAM_WORKERS', '128')
+values.setdefault('CBGRAM_MAX_CONCURRENT', '1024')
+values.setdefault('CBGRAM_WORKERS', '256')
 values['CBGRAM_SESSION_DIR'] = '/usr/src/app/.sessions'
 
 own_port = os.environ.get('OWN_WEB_PORT', '').strip()

@@ -88,15 +88,15 @@ class TelegramDownloadHelper:
             self._listener.up_dest if self._listener.is_leech else None
         ) or Config.LEECH_LOG_CHAT
         personal_mode = self._listener.user_dict.get("TELEGRAM_SESSION_MODE", "disabled")
-        has_helpers = (
-            (tm in ("bot", "both") and len(TgClient.helper_bots) != 0)
-            or (tm in ("user", "both") and len(TgClient.helper_users) != 0)
-        )
         self._hyper_dl = (
             Config.USE_HYPER
             and personal_mode not in ("telegram", "both")
-            and bool(self._dump_chat)
-            and has_helpers
+            and (
+                TgClient.user is not None
+                or TgClient.bot is not None
+                or len(TgClient.helper_bots) != 0
+                or len(TgClient.helper_users) != 0
+            )
         )
         self._hyper_dl_instance = None
 

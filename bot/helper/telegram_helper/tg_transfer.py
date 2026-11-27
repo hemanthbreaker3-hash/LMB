@@ -209,13 +209,14 @@ class HypertgTransfer:
         return await self._pool.get_session(idx, dc_id, is_media=True, lane=lane)
 
     async def _warmup(self, indices, dc_id):
-        async def _w(i):
+        async def _w(item):
+            ci, lane = item if isinstance(item, tuple) else (item, 0)
             try:
-                await self._pool.get_session(i, dc_id)
+                await self._pool.get_session(ci, dc_id, lane=lane)
             except Exception as e:
-                LOGGER.warning(f"HypertgTransfer warmup fail client {i}: {e}")
+                LOGGER.warning(f"HypertgTransfer warmup fail client {ci} lane={lane}: {e}")
 
-        await gather(*[_w(i) for i in indices])
+        await gather(*[_w(item) for item in indices])
 
     async def _close_all(self):
         await self._pool.stop()

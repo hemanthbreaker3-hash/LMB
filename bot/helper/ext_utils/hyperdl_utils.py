@@ -61,10 +61,10 @@ class HypertgDownload(HypertgTransfer):
     KB = 1024
     # Telegram GetFile hard limit is 1 MiB per request; use the max from part 1.
     _MIN_CHUNK = 256 * KB
-    _DEFAULT_PIPELINE = 48
+    _DEFAULT_PIPELINE = 32
     _MIN_PIPELINE = 12
-    _MAX_PIPELINE_MULT = 2
-    _LOW_WORKERS = 8
+    _MAX_PIPELINE_MULT = 1
+    _LOW_WORKERS = 12
     _HIGH_WORKERS = max(16, len(allowed_cpus()) * 4)
     _MAX_RETRIES = 4
 
@@ -86,9 +86,7 @@ class HypertgDownload(HypertgTransfer):
             Config.HYPER_PIPELINE or self._DEFAULT_PIPELINE, self._MIN_PIPELINE
         )
         # Keep deep pipeline per part so the first range is already saturated.
-        self.pipeline_depth = max(
-            base_pipe // max(self.num_parts, 1), self._MIN_PIPELINE
-        )
+        self.pipeline_depth = max(min(base_pipe, 32), self._MIN_PIPELINE)
         self.message = None
         self.media = None
         self.dump_chat = None
@@ -356,14 +354,14 @@ class HypertgDownload(HypertgTransfer):
                             if chunk is not None:
                                 return s, off, chunk
                             self._cdn_info.pop(idx, None)
-                            await sleep(attempt + 1)
+                            await sleep(0.1)
                             continue
                         if dc_or_ref == -1:
                             fid_new = await self._fetch_ref(
                                 idx, self.clients[idx], force=True
                             )
                             my_loc = self._location(fid_new)
-                            await sleep(attempt + 1)
+                            await sleep(0.1)
                             continue
                         if dc_or_ref == -2:
                             if bot_down:
@@ -373,11 +371,11 @@ class HypertgDownload(HypertgTransfer):
                             if pipe_timeouts >= 6:
                                 bot_down = True
                                 return s, off, b""
-                            await sleep(min(3, pipe_timeouts))
+                            await sleep(0.2)
                             continue
                         my_sess = await self._get_session(idx, dc_or_ref, force=True, lane=lane)
                         sess = my_sess
-                        await sleep(attempt + 1)
+                        await sleep(0.1)
                         continue
                     timeout_count = 0
                     return s, off, result
@@ -401,7 +399,7 @@ class HypertgDownload(HypertgTransfer):
                     if pipe_timeouts >= 6:
                         bot_down = True
                         return s, off, b""
-                    await sleep(min(3, pipe_timeouts))
+                    await sleep(0.2)
                     continue
             timeout_count += 1
             if timeout_count >= 3:
@@ -555,7 +553,7 @@ class HypertgDownload(HypertgTransfer):
         all_bad_mode = False
         while all_failed_offsets:
             retry_round += 1
-            await sleep(1)
+            await sleep(0.1)
 
             good_bots = sorted(
                 [i for i in pool if i not in bad_bots],
@@ -742,7 +740,7 @@ class HypertgDownload(HypertgTransfer):
 
             first_fid = fid_map[assigns[0]]
             try:
-                await self._warmup(unique_clients, first_fid.dc_id)
+                await self._warmup([(assigns[i], i) for i in range(n_parts)], first_fid.dc_id)
             except Exception as e:
                 LOGGER.warning(f"HypertgDL warmup err: {e}")
 
